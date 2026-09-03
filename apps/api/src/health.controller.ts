@@ -91,6 +91,32 @@ export class HealthController {
     }
   }
 
+  @Get('config')
+  checkConfig() {
+    const raw = process.env.DATABASE_URL;
+
+    if (!raw) {
+      return { present: false };
+    }
+
+    try {
+      const url = new URL(raw);
+      return {
+        present: true,
+        protocol: url.protocol,
+        hostname: url.hostname,
+        port: url.port,
+        username: url.username,
+        pathname: url.pathname,
+      };
+    } catch (error) {
+      return {
+        present: true,
+        parseError: error instanceof Error ? error.message : 'Unknown error',
+      };
+    }
+  }
+
   @Get('pg')
   async checkPg() {
     const connectionString = process.env.DATABASE_URL;

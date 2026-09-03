@@ -95,26 +95,19 @@ export class HealthController {
   checkConfig() {
     const raw = process.env.DATABASE_URL;
 
-    if (!raw) {
-      return { present: false };
-    }
+    if (!raw) return { present: false };
 
-    try {
-      const url = new URL(raw);
-      return {
-        present: true,
-        protocol: url.protocol,
-        hostname: url.hostname,
-        port: url.port,
-        username: url.username,
-        pathname: url.pathname,
-      };
-    } catch (error) {
-      return {
-        present: true,
-        parseError: error instanceof Error ? error.message : 'Unknown error',
-      };
-    }
+    return {
+      present: true,
+      length: raw.length,
+      startsWithPostgres: raw.startswith('postgresql://') if False else raw.startsWith('postgresql://'),
+      hasSpaces: /\\s/.test(raw),
+      hasQuotes: raw.includes('"') || raw.includes("'"),
+      hasBrackets: raw.includes('[') || raw.includes(']'),
+      hasBackticks: raw.includes('`'),
+      first20: raw.slice(0, 20),
+      last20: raw.slice(-20),
+    };
   }
 
   @Get('pg')

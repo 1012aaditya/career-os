@@ -1,0 +1,11 @@
+{
+  "name": "career-os",
+  "private": true,
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter './apps/*' dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint"
+  }
+}

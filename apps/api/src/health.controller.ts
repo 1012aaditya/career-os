@@ -1,3 +1,4 @@
+
 import { Controller, Get } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
@@ -20,11 +21,24 @@ export class HealthController {
 
   @Get('db')
   async checkDatabase() {
-    await prisma.$queryRaw`SELECT 1`;
+    const url = new URL(process.env.DATABASE_URL!);
 
-    return {
-      status: 'ok',
-      database: 'connected',
-    };
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+
+      return {
+        status: 'ok',
+        database: 'connected',
+        host: url.hostname,
+        port: url.port,
+      };
+    } catch (error) {
+      return {
+        status: 'error',
+        database: 'unreachable',
+        host: url.hostname,
+        port: url.port,
+      };
+    }
   }
 }

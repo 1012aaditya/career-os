@@ -1,6 +1,7 @@
 import { Controller, Get } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
+import { Pool } from 'pg';
 import { promises as dns } from 'node:dns';
 import { createConnection } from 'node:net';
 
@@ -87,6 +88,30 @@ export class HealthController {
         status: 'error',
         message: error instanceof Error ? error.message : 'Unknown error',
       };
+    }
+  }
+
+  @Get('pg')
+  async checkPg() {
+    const connectionString = process.env.DATABASE_URL;
+
+    if (!connectionString) {
+      return { status: 'error', message: 'DATABASE_URL missing' };
+    }
+
+    const pool = new Pool({ connectionString });
+
+    try {
+      await pool.query('SELECT 1');
+      return { status: 'ok', database: 'pg-connected' };
+    } catch (error) {
+      return {
+        status: 'error',
+        database: 'pg-unreachable',
+        error: error instanceof Error ? error.message : 'Unknown error',
+      };
+    } finally {
+      await pool.end();
     }
   }
 

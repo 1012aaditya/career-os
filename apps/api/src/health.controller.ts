@@ -27,38 +27,66 @@ export class HealthController {
 
   @Get('tcp')
   async checkTcp() {
-    const raw = process.env.DATABASE_URL;
-    if (!raw) return { status: 'error', message: 'DATABASE_URL missing' };
+    const dns = await import('node:dns/promises');
+    const net = await import('node:net');
 
-    const url = new URL(raw);
-    const port = Number(url.port || 5432);
+    const host = 'aws-0-ap-southeast-2.pooler.supabase.com';
+    const port = 5432;
 
     try {
-      const addresses = await dns.lookup(url.hostname, { all: true });
+      const addresses = await dns.lookup(host, { all: true });
+
       const connections = await Promise.all(
         addresses.map(
           (address) =>
             new Promise((resolve) => {
-              const socket = createConnection({
+              const socket = net.createConnection({
                 host: address.address,
                 port,
                 family: address.family,
               });
+
               socket.setTimeout(5000);
+
               const finish = (result: unknown) => {
                 socket.destroy();
                 resolve(result);
               };
-              socket.on('connect', () => finish({ status: 'connected', address: address.address, family: address.family }));
-              socket.on('timeout', () => finish({ status: 'timeout', address: address.address, family: address.family }));
-              socket.on('error', (error: NodeJS.ErrnoException) => finish({ status: 'error', code: error.code }));
+
+              socket.on('connect', () =>
+                finish({
+                  status: 'connected',
+                  address: address.address,
+                  family: address.family,
+                }),
+              );
+
+              socket.on('timeout', () =>
+                finish({
+                  status: 'timeout',
+                  address: address.address,
+                  family: address.family,
+                }),
+              );
+
+              socket.on('error', (error: NodeJS.ErrnoException) =>
+                finish({
+                  status: 'error',
+                  address: address.address,
+                  family: address.family,
+                  code: error.code,
+                }),
+              );
             }),
         ),
       );
 
-      return { status: 'ok', host: url.hostname, port, dns: addresses, connections };
+      return { host, port, dns: addresses, connections };
     } catch (error) {
-      return { status: 'error', message: error instanceof Error ? error.message : 'Unknown error' };
+      return {
+        status: 'error',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      };
     }
   }
 

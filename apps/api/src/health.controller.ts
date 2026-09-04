@@ -2,15 +2,11 @@ import { Controller, Get } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 
-const connectionString = process.env.DATABASE_URL;
-
-const prisma = connectionString
-  ? new PrismaClient({
-      adapter: new PrismaPg({
-        connectionString,
-      }),
-    })
-  : null;
+const prisma = new PrismaClient({
+  adapter: new PrismaPg({
+    connectionString: `postgresql://${process.env.DB_USER}:${encodeURIComponent(process.env.DB_PASSWORD ?? '')}@${process.env.DB_HOST}:${process.env.DB_PORT ?? '5432'}/${process.env.DB_NAME ?? 'postgres'}`,
+  }),
+});
 
 @Controller('health')
 export class HealthController {
@@ -24,13 +20,6 @@ export class HealthController {
 
   @Get('db')
   async checkDatabase() {
-    if (!prisma) {
-      return {
-        status: 'error',
-        database: 'DATABASE_URL missing',
-      };
-    }
-
     try {
       await prisma.$queryRaw`SELECT 1`;
 

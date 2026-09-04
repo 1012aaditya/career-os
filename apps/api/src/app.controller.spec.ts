@@ -1,6 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
+
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
+import { AuthGuard } from './auth/auth.guard.js';
 
 describe('AppController', () => {
   let appController: AppController;
@@ -9,7 +11,10 @@ describe('AppController', () => {
     const app: TestingModule = await Test.createTestingModule({
       controllers: [AppController],
       providers: [AppService],
-    }).compile();
+    })
+      .overrideGuard(AuthGuard)
+      .useValue({ canActivate: vi.fn().mockReturnValue(true) })
+      .compile();
 
     appController = app.get<AppController>(AppController);
   });

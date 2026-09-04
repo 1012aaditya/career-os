@@ -5,3 +5,300 @@ datasource db {
 generator client {
   provider = "prisma-client-js"
 }
+
+enum ExperienceType {
+  EMPLOYMENT
+  FOUNDER
+  FREELANCE
+  EDUCATION
+  VOLUNTEER
+  OTHER
+}
+
+enum EvidenceSourceType {
+  MANUAL
+  RESUME
+  GITHUB
+  PORTFOLIO
+  LINKEDIN
+  CERTIFICATION
+  DOCUMENT
+  OTHER
+}
+
+model User {
+  id        String   @id @db.Uuid
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  profile      Profile?
+  experiences  Experience[]
+  projects     Project[]
+  userSkills   UserSkill[]
+  achievements Achievement[]
+  evidence     Evidence[]
+  goals        Goal[]
+}
+
+model Profile {
+  id        String  @id @default(uuid()) @db.Uuid
+  userId    String  @unique @db.Uuid
+  firstName String?
+  lastName  String?
+  headline  String?
+  bio       String?
+  location  String?
+  avatarUrl String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Company {
+  id             String  @id @default(uuid()) @db.Uuid
+  name           String
+  normalizedName String  @unique
+  websiteUrl     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  experiences Experience[]
+}
+
+model Experience {
+  id          String         @id @default(uuid()) @db.Uuid
+  userId      String         @db.Uuid
+  companyId   String?        @db.Uuid
+  type        ExperienceType
+  title       String
+  description String?
+  location    String?
+  startDate   DateTime?
+  endDate     DateTime?
+  isCurrent   Boolean        @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user         User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company      Company?                @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  projects     ExperienceProject[]
+  skills       ExperienceSkill[]
+  achievements ExperienceAchievement[]
+  evidence     EvidenceExperience[]
+
+  @@index([userId])
+  @@index([companyId])
+  @@index([userId, startDate])
+}
+
+model Project {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @db.Uuid
+  name        String
+  description String?
+  url         String?
+  startDate   DateTime?
+  endDate     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  experiences  ExperienceProject[]
+  skills       ProjectSkill[]
+  achievements ProjectAchievement[]
+  evidence     EvidenceProject[]
+
+  @@index([userId])
+  @@index([userId, startDate])
+}
+
+model Skill {
+  id             String @id @default(uuid()) @db.Uuid
+  name           String
+  normalizedName String @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  userSkills  UserSkill[]
+  experiences ExperienceSkill[]
+  projects    ProjectSkill[]
+  evidence    EvidenceSkill[]
+}
+
+model UserSkill {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  skillId   String   @db.Uuid
+  createdAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skill Skill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, skillId])
+  @@index([skillId])
+}
+
+model Achievement {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @db.Uuid
+  title       String
+  description String?
+  occurredAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user        User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  experiences ExperienceAchievement[]
+  projects    ProjectAchievement[]
+  evidence    EvidenceAchievement[]
+
+  @@index([userId])
+  @@index([userId, occurredAt])
+}
+
+model Evidence {
+  id          String             @id @default(uuid()) @db.Uuid
+  userId      String             @db.Uuid
+  sourceType  EvidenceSourceType
+  title       String
+  description String?
+  sourceUrl   String?
+  externalId  String?
+  occurredAt  DateTime?
+  capturedAt  DateTime           @default(now())
+  metadata    Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user         User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  experiences  EvidenceExperience[]
+  projects     EvidenceProject[]
+  skills       EvidenceSkill[]
+  achievements EvidenceAchievement[]
+
+  @@index([userId])
+  @@index([userId, sourceType])
+  @@index([userId, capturedAt])
+}
+
+model Goal {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @db.Uuid
+  title       String
+  description String?
+  targetDate  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, targetDate])
+}
+
+model ExperienceProject {
+  experienceId String @db.Uuid
+  projectId    String @db.Uuid
+
+  experience Experience @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+  project    Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@id([experienceId, projectId])
+  @@index([projectId])
+}
+
+model ExperienceSkill {
+  experienceId String @db.Uuid
+  skillId      String @db.Uuid
+
+  experience Experience @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+  skill      Skill      @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@id([experienceId, skillId])
+  @@index([skillId])
+}
+
+model ProjectSkill {
+  projectId String @db.Uuid
+  skillId   String @db.Uuid
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  skill   Skill   @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, skillId])
+  @@index([skillId])
+}
+
+model ExperienceAchievement {
+  experienceId  String @db.Uuid
+  achievementId String @db.Uuid
+
+  experience  Experience  @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+  achievement Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  @@id([experienceId, achievementId])
+  @@index([achievementId])
+}
+
+model ProjectAchievement {
+  projectId     String @db.Uuid
+  achievementId String @db.Uuid
+
+  project     Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  achievement Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, achievementId])
+  @@index([achievementId])
+}
+
+model EvidenceExperience {
+  evidenceId   String @db.Uuid
+  experienceId String @db.Uuid
+
+  evidence   Evidence   @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+  experience Experience @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+
+  @@id([evidenceId, experienceId])
+  @@index([experienceId])
+}
+
+model EvidenceProject {
+  evidenceId String @db.Uuid
+  projectId  String @db.Uuid
+
+  evidence Evidence @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+  project  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@id([evidenceId, projectId])
+  @@index([projectId])
+}
+
+model EvidenceSkill {
+  evidenceId String @db.Uuid
+  skillId    String @db.Uuid
+
+  evidence Evidence @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+  skill    Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@id([evidenceId, skillId])
+  @@index([skillId])
+}
+
+model EvidenceAchievement {
+  evidenceId    String @db.Uuid
+  achievementId String @db.Uuid
+
+  evidence    Evidence    @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+  achievement Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  @@id([evidenceId, achievementId])
+  @@index([achievementId])
+}

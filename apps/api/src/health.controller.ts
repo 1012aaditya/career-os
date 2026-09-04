@@ -1,15 +1,10 @@
 import { Controller, Get } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
-import { PrismaPg } from '@prisma/adapter-pg';
-
-const prisma = new PrismaClient({
-  adapter: new PrismaPg({
-    connectionString: `postgresql://${process.env.DB_USER}:${encodeURIComponent(process.env.DB_PASSWORD ?? '')}@${process.env.DB_HOST}:${process.env.DB_PORT ?? '5432'}/${process.env.DB_NAME ?? 'postgres'}`,
-  }),
-});
+import { PrismaService } from './prisma/prisma.service.js';
 
 @Controller('health')
 export class HealthController {
+  constructor(private readonly prisma: PrismaService) {}
+
   @Get()
   check() {
     return {
@@ -21,17 +16,16 @@ export class HealthController {
   @Get('db')
   async checkDatabase() {
     try {
-      await prisma.$queryRaw`SELECT 1`;
+      await this.prisma.$queryRaw`SELECT 1`;
 
       return {
         status: 'ok',
         database: 'connected',
       };
-    } catch (error) {
+    } catch {
       return {
         status: 'error',
         database: 'unreachable',
-        error: error instanceof Error ? error.message : 'Unknown error',
       };
     }
   }

@@ -15,6 +15,14 @@ enum ExperienceType {
   OTHER
 }
 
+enum ResumeImportStatus {
+  PENDING
+  PROCESSING
+  NEEDS_REVIEW
+  CONFIRMED
+  FAILED
+}
+
 enum EvidenceSourceType {
   MANUAL
   RESUME
@@ -31,13 +39,14 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  profile      Profile?
-  experiences  Experience[]
-  projects     Project[]
-  userSkills   UserSkill[]
-  achievements Achievement[]
-  evidence     Evidence[]
-  goals        Goal[]
+  profile       Profile?
+  experiences   Experience[]
+  projects      Project[]
+  userSkills    UserSkill[]
+  achievements  Achievement[]
+  evidence      Evidence[]
+  goals         Goal[]
+  resumeImports ResumeImport[]
 }
 
 model Profile {
@@ -66,6 +75,23 @@ model Company {
   updatedAt DateTime @updatedAt
 
   experiences Experience[]
+}
+
+model ResumeImport {
+  id               String             @id @default(uuid()) @db.Uuid
+  userId           String             @db.Uuid
+  fileName         String
+  storagePath      String
+  status           ResumeImportStatus @default(PENDING)
+  extractionResult Json?
+  errorMessage     String?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, status])
 }
 
 model Experience {

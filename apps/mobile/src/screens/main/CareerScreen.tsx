@@ -184,6 +184,14 @@ export function CareerScreen() {
     return buildGraphModel(graph);
   }, [graph]);
 
+  const snapshot = useMemo(() => {
+    if (!graph) {
+      return null;
+    }
+
+    return buildCareerSnapshot(graph);
+  }, [graph]);
+
   if (loading) {
     return (
       <Screen>
@@ -238,11 +246,11 @@ export function CareerScreen() {
     return null;
   }
 
-  const skills = graph.userSkills ?? [];
   const experiences = graph.experiences ?? [];
   const projects = graph.projects ?? [];
   const achievements = graph.achievements ?? [];
-  const evidence = graph.evidence ?? [];
+  const capabilities =
+    snapshot?.capabilities ?? [];
 
   return (
     <Screen>
@@ -285,6 +293,12 @@ export function CareerScreen() {
             </AppText>
           </View>
         </View>
+
+        {snapshot ? (
+          <CareerSnapshotSection
+            snapshot={snapshot}
+          />
+        ) : null}
 
         <Card>
           <View style={styles.graphHeader}>
@@ -543,102 +557,61 @@ export function CareerScreen() {
         </Card>
 
         <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <AppText variant="heading">
-              Career signals
-            </AppText>
-
-            <AppText variant="caption" muted>
-              What makes up your graph
-            </AppText>
-          </View>
-
-          <View style={styles.signalGrid}>
-            <SignalCard
-              number={skills.length}
-              label="Capabilities"
-              description="Skills you can demonstrate"
-            />
-
-            <SignalCard
-              number={experiences.length}
-              label="Experience"
-              description="Places you've worked"
-            />
-
-            <SignalCard
-              number={projects.length}
-              label="Projects"
-              description="Things you've built"
-            />
-
-            <SignalCard
-              number={evidence.length}
-              label="Evidence"
-              description="Proof behind your claims"
-            />
-          </View>
-        </View>
-
-        <View style={styles.section}>
           <AppText variant="heading">
             Strongest capabilities
           </AppText>
 
           <Card>
-            {skills.length === 0 ? (
+            {capabilities.length === 0 ? (
               <AppText variant="body" muted>
                 No capabilities mapped yet.
               </AppText>
             ) : (
               <View style={styles.skillList}>
-                {skills
+                {capabilities
                   .slice(0, 8)
-                  .map((item, index) => {
-                    const name =
-                      getSkillName(item);
-
-                    return (
+                  .map((capability, index) => (
+                    <View
+                      key={`${capability.name}-${index}`}
+                      style={styles.skillRow}
+                    >
                       <View
-                        key={`${name}-${index}`}
-                        style={styles.skillRow}
+                        style={styles.skillIcon}
                       >
-                        <View
-                          style={styles.skillIcon}
+                        <AppText
+                          variant="caption"
+                          style={styles.skillIconText}
                         >
-                          <AppText
-                            variant="caption"
-                            style={styles.skillIconText}
-                          >
-                            {index + 1}
-                          </AppText>
-                        </View>
+                          {index + 1}
+                        </AppText>
+                      </View>
 
-                        <View
-                          style={styles.skillInfo}
-                        >
-                          <AppText variant="bodyMedium">
-                            {name}
-                          </AppText>
-
-                          <AppText
-                            variant="caption"
-                            muted
-                          >
-                            Connected to your career
-                            evidence
-                          </AppText>
-                        </View>
+                      <View
+                        style={styles.skillInfo}
+                      >
+                        <AppText variant="bodyMedium">
+                          {capability.name}
+                        </AppText>
 
                         <AppText
                           variant="caption"
                           muted
                         >
-                          →
+                          {capability.connections >
+                          0
+                            ? `Linked to ${capability.connections} ${pluralize(capability.connections, 'record')} in your graph`
+                            : 'Not linked to a record yet'}
                         </AppText>
                       </View>
-                    );
-                  })}
+
+                      <AppText
+                        variant="caption"
+                        muted
+                      >
+                        →
+                      </AppText>
+                    </View>
+                  ))}
               </View>
             )}
           </Card>
@@ -816,32 +789,275 @@ function NodeDetailsModal({
   );
 }
 
-function SignalCard({
-  number,
-  label,
-  description,
+function CareerSnapshotSection({
+  snapshot,
 }: {
-  number: number;
+  snapshot: CareerSnapshot;
+}) {
+  const shapeParts = [
+    snapshot.capabilityCount > 0
+      ? `${snapshot.capabilityCount} ${pluralize(snapshot.capabilityCount, 'capability', 'capabilities')}`
+      : null,
+    snapshot.experienceCount > 0
+      ? `${snapshot.experienceCount} ${pluralize(snapshot.experienceCount, 'experience')}`
+      : null,
+    snapshot.projectCount > 0
+      ? `${snapshot.projectCount} ${pluralize(snapshot.projectCount, 'project')}`
+      : null,
+    snapshot.evidenceCount > 0
+      ? `${snapshot.evidenceCount} evidence ${pluralize(snapshot.evidenceCount, 'signal')}`
+      : null,
+    snapshot.achievementCount > 0
+      ? `${snapshot.achievementCount} ${pluralize(snapshot.achievementCount, 'achievement')}`
+      : null,
+  ].filter(
+    (part): part is string => part !== null,
+  );
+
+  return (
+    <View style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <AppText variant="heading">
+          Career Snapshot
+        </AppText>
+
+        <AppText variant="caption" muted>
+          From your graph
+        </AppText>
+      </View>
+
+      <Card>
+        <View style={styles.identityRow}>
+          <View style={styles.identityAvatar}>
+            <AppText
+              variant="bodyMedium"
+              style={styles.identityInitials}
+            >
+              {snapshot.initials}
+            </AppText>
+          </View>
+
+          <View style={styles.identityText}>
+            <AppText variant="heading">
+              {snapshot.name ??
+                'Your career profile'}
+            </AppText>
+
+            {snapshot.headline ? (
+              <AppText
+                variant="bodyMedium"
+                style={styles.identityHeadline}
+              >
+                {snapshot.headline}
+              </AppText>
+            ) : null}
+
+            {snapshot.location ? (
+              <AppText
+                variant="caption"
+                muted
+                style={styles.identityMeta}
+              >
+                {snapshot.location}
+              </AppText>
+            ) : null}
+
+            {snapshot.headlineIsDerived ? (
+              <AppText
+                variant="caption"
+                muted
+                style={styles.identityMeta}
+              >
+                Summarised from your graph — add
+                a headline to personalise it.
+              </AppText>
+            ) : null}
+          </View>
+        </View>
+      </Card>
+
+      <View style={styles.snapshotGrid}>
+        <SnapshotTile
+          label="Capabilities"
+          value={
+            snapshot.capabilityCount > 0
+              ? `${snapshot.capabilityCount} ${pluralize(snapshot.capabilityCount, 'capability', 'capabilities')}`
+              : 'None yet'
+          }
+          lines={snapshot.capabilities
+            .slice(0, 3)
+            .map(
+              (capability) =>
+                capability.name,
+            )}
+          emptyText="Import a resume to map your skills."
+          caption={
+            snapshot.capabilityCount > 0
+              ? 'Most connected first'
+              : null
+          }
+        />
+
+        <SnapshotTile
+          label="Experience"
+          value={
+            snapshot.experienceCount > 0
+              ? `${snapshot.experienceCount} ${pluralize(snapshot.experienceCount, 'role')}`
+              : 'None yet'
+          }
+          lines={
+            snapshot.latestExperience
+              ? [
+                  snapshot.latestExperience
+                    .title,
+                  snapshot.latestExperience
+                    .company,
+                  snapshot.latestExperience
+                    .period,
+                ].filter(
+                  (line): line is string =>
+                    line !== null,
+                )
+              : []
+          }
+          emptyText="No roles recorded yet."
+          caption={
+            snapshot.latestExperience
+              ? 'Most recent'
+              : null
+          }
+        />
+
+        <SnapshotTile
+          label="Projects"
+          value={
+            snapshot.projectCount > 0
+              ? `${snapshot.projectCount} ${pluralize(snapshot.projectCount, 'project')}`
+              : 'None yet'
+          }
+          lines={snapshot.recentProjects}
+          emptyText="No projects recorded yet."
+          caption={
+            snapshot.recentProjects.length > 0
+              ? 'Most recent'
+              : null
+          }
+        />
+
+        <SnapshotTile
+          label="Evidence"
+          value={
+            snapshot.evidenceCount > 0
+              ? `${snapshot.evidenceCount} ${pluralize(snapshot.evidenceCount, 'signal')}`
+              : 'None yet'
+          }
+          lines={
+            snapshot.latestEvidence
+              ? [snapshot.latestEvidence]
+              : []
+          }
+          emptyText="No supporting signals yet."
+          caption={
+            snapshot.latestEvidence
+              ? 'Latest captured'
+              : null
+          }
+        />
+      </View>
+
+      <Card>
+        <AppText variant="bodyMedium">
+          Career shape
+        </AppText>
+
+        <AppText
+          variant="body"
+          muted
+          style={styles.shapeText}
+        >
+          {shapeParts.length > 0
+            ? shapeParts.join('  ·  ')
+            : 'No records in your graph yet.'}
+        </AppText>
+
+        {shapeParts.length > 0 ? (
+          <AppText
+            variant="caption"
+            muted
+            style={styles.shapeFootnote}
+          >
+            {snapshot.totalRecords} records
+            counted directly from your career
+            graph.
+          </AppText>
+        ) : null}
+      </Card>
+    </View>
+  );
+}
+
+function SnapshotTile({
+  label,
+  value,
+  lines,
+  caption,
+  emptyText,
+}: {
   label: string;
-  description: string;
+  value: string;
+  lines: string[];
+  caption: string | null;
+  emptyText: string;
 }) {
   return (
-    <View style={styles.signalCard}>
-      <AppText variant="title">
-        {number}
-      </AppText>
-
-      <AppText variant="bodyMedium">
+    <View style={styles.snapshotTile}>
+      <AppText
+        variant="caption"
+        muted
+        style={styles.snapshotTileLabel}
+      >
         {label}
       </AppText>
 
       <AppText
-        variant="caption"
-        muted
-        style={styles.signalDescription}
+        variant="bodyMedium"
+        style={styles.snapshotTileValue}
       >
-        {description}
+        {value}
       </AppText>
+
+      {lines.length === 0 ? (
+        <AppText
+          variant="caption"
+          muted
+          style={styles.snapshotTileEmpty}
+        >
+          {emptyText}
+        </AppText>
+      ) : (
+        <View style={styles.snapshotTileLines}>
+          {caption ? (
+            <AppText
+              variant="caption"
+              muted
+              style={styles.snapshotTileCaption}
+            >
+              {caption}
+            </AppText>
+          ) : null}
+
+          {lines.map((line, index) => (
+            <AppText
+              key={`${line}-${index}`}
+              variant="caption"
+              muted={index > 0}
+              style={styles.snapshotTileLine}
+            >
+              {truncate(line, 24)}
+            </AppText>
+          ))}
+        </View>
+      )}
     </View>
   );
 }
@@ -875,6 +1091,475 @@ function LegendItem({
       </AppText>
     </View>
   );
+}
+
+type CapabilitySummary = {
+  name: string;
+  connections: number;
+};
+
+type CareerSnapshot = {
+  name: string | null;
+  headline: string | null;
+  headlineIsDerived: boolean;
+  location: string | null;
+  initials: string;
+  capabilities: CapabilitySummary[];
+  capabilityCount: number;
+  experienceCount: number;
+  latestExperience: {
+    title: string;
+    company: string | null;
+    period: string | null;
+  } | null;
+  projectCount: number;
+  recentProjects: string[];
+  evidenceCount: number;
+  latestEvidence: string | null;
+  achievementCount: number;
+  totalRecords: number;
+};
+
+// Everything below is a deterministic read of the CareerGraph payload:
+// counting records, de-duplicating, sorting by date, formatting. No value
+// is inferred or generated.
+function buildCareerSnapshot(
+  graph: CareerGraph,
+): CareerSnapshot {
+  const userSkills = toArray(graph.userSkills);
+  const experiences = toArray(graph.experiences);
+  const projects = toArray(graph.projects);
+  const evidence = toArray(graph.evidence);
+  const achievements = toArray(graph.achievements);
+
+  const capabilities = rankCapabilities(
+    userSkills,
+    experiences,
+    projects,
+  );
+
+  const name = getProfileName(graph.profile);
+
+  const latestExperienceRecord =
+    pickMostRecent(
+      experiences,
+      getExperienceRecency,
+    );
+
+  const orderedProjects = sortByRecency(
+    projects,
+    getProjectRecency,
+  );
+
+  const latestEvidenceRecord = pickMostRecent(
+    evidence,
+    getEvidenceRecency,
+  );
+
+  const derivedHeadline = deriveHeadline(
+    capabilities,
+    experiences.length,
+    projects.length,
+    evidence.length,
+  );
+
+  const profileHeadline = getStringField(
+    graph.profile,
+    'headline',
+  );
+
+  return {
+    name,
+    headline: profileHeadline ?? derivedHeadline,
+    headlineIsDerived:
+      profileHeadline === null &&
+      derivedHeadline !== null,
+    location: getStringField(
+      graph.profile,
+      'location',
+    ),
+    initials: getInitials(name, graph.email),
+    capabilities,
+    capabilityCount: capabilities.length,
+    experienceCount: experiences.length,
+    latestExperience: latestExperienceRecord
+      ? {
+          title: getExperienceTitle(
+            latestExperienceRecord,
+          ),
+          company: getSnapshotCompanyName(
+            latestExperienceRecord,
+          ),
+          period: formatPeriod(
+            latestExperienceRecord,
+          ),
+        }
+      : null,
+    projectCount: projects.length,
+    recentProjects: orderedProjects
+      .slice(0, 2)
+      .map(getProjectName),
+    evidenceCount: evidence.length,
+    latestEvidence: latestEvidenceRecord
+      ? getEvidenceTitle(
+          latestEvidenceRecord,
+        )
+      : null,
+    achievementCount: achievements.length,
+    totalRecords:
+      capabilities.length +
+      experiences.length +
+      projects.length +
+      evidence.length +
+      achievements.length,
+  };
+}
+
+// "Strongest" = most referenced across the graph, which is a count of real
+// records rather than an invented proficiency score. Ties keep the order
+// the API returned them in, so the list is stable between refreshes.
+function rankCapabilities(
+  userSkills: unknown[],
+  experiences: unknown[],
+  projects: unknown[],
+): CapabilitySummary[] {
+  const entries = new Map<
+    string,
+    CapabilitySummary & { index: number }
+  >();
+
+  userSkills.forEach((item, index) => {
+    const name = getSkillName(item);
+    const key = name.toLowerCase();
+
+    if (entries.has(key)) {
+      return;
+    }
+
+    entries.set(key, {
+      name,
+      connections: 0,
+      index,
+    });
+  });
+
+  // Only experiences and projects carry a hydrated skill relation; the
+  // evidence payload exposes join rows without skill names.
+  [...experiences, ...projects].forEach(
+    (record) => {
+      const seen = new Set<string>();
+
+      getNestedSkillNames(record).forEach(
+        (skillName) => {
+          const key = skillName.toLowerCase();
+
+          if (seen.has(key)) {
+            return;
+          }
+
+          seen.add(key);
+
+          const entry = entries.get(key);
+
+          if (entry) {
+            entry.connections += 1;
+          }
+        },
+      );
+    },
+  );
+
+  return [...entries.values()]
+    .sort(
+      (a, b) =>
+        b.connections - a.connections ||
+        a.index - b.index,
+    )
+    .map(({ name, connections }) => ({
+      name,
+      connections,
+    }));
+}
+
+// Used only when the profile has no headline of its own. Built from a real
+// skill name plus a record count, so it never asserts a job title.
+function deriveHeadline(
+  capabilities: CapabilitySummary[],
+  experienceCount: number,
+  projectCount: number,
+  evidenceCount: number,
+): string | null {
+  const parts: string[] = [];
+
+  if (capabilities.length > 0) {
+    parts.push(capabilities[0].name);
+  }
+
+  if (experienceCount > 0) {
+    parts.push(
+      `${experienceCount} ${pluralize(experienceCount, 'role')}`,
+    );
+  } else if (projectCount > 0) {
+    parts.push(
+      `${projectCount} ${pluralize(projectCount, 'project')}`,
+    );
+  } else if (evidenceCount > 0) {
+    parts.push(
+      `${evidenceCount} ${pluralize(evidenceCount, 'signal')}`,
+    );
+  }
+
+  if (parts.length === 0) {
+    return null;
+  }
+
+  return parts.join(' • ');
+}
+
+function getProfileName(
+  profile: unknown,
+): string | null {
+  const parts = [
+    getStringField(profile, 'firstName'),
+    getStringField(profile, 'lastName'),
+  ].filter(
+    (part): part is string => part !== null,
+  );
+
+  if (parts.length === 0) {
+    return null;
+  }
+
+  return parts.join(' ');
+}
+
+function getInitials(
+  name: string | null,
+  email: string,
+) {
+  if (name) {
+    const initials = name
+      .split(/\s+/)
+      .filter((part) => part.length > 0)
+      .slice(0, 2)
+      .map((part) =>
+        part.charAt(0).toUpperCase(),
+      )
+      .join('');
+
+    if (initials.length > 0) {
+      return initials;
+    }
+  }
+
+  if (email.length > 0) {
+    return email.charAt(0).toUpperCase();
+  }
+
+  return '•';
+}
+
+function getSnapshotCompanyName(
+  item: unknown,
+): string | null {
+  if (
+    typeof item === 'object' &&
+    item !== null &&
+    'company' in item
+  ) {
+    return getStringField(
+      item.company,
+      'name',
+    );
+  }
+
+  return null;
+}
+
+// Year-only range. A record with a start date but no end date and no
+// isCurrent flag is rendered as "From <year>" rather than "— Present",
+// because the payload does not say the role is ongoing.
+function formatPeriod(
+  item: unknown,
+): string | null {
+  const start = getYearField(
+    item,
+    'startDate',
+  );
+
+  const end = getYearField(item, 'endDate');
+
+  const isCurrent = getBooleanField(
+    item,
+    'isCurrent',
+  );
+
+  if (start !== null && isCurrent) {
+    return `${start} — Present`;
+  }
+
+  if (start !== null && end !== null) {
+    return start === end
+      ? `${start}`
+      : `${start} — ${end}`;
+  }
+
+  if (start !== null) {
+    return `From ${start}`;
+  }
+
+  if (end !== null) {
+    return `Until ${end}`;
+  }
+
+  if (isCurrent) {
+    return 'Current';
+  }
+
+  return null;
+}
+
+function getExperienceRecency(
+  item: unknown,
+) {
+  if (getBooleanField(item, 'isCurrent')) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  return (
+    getTimeField(item, 'endDate') ??
+    getTimeField(item, 'startDate') ??
+    Number.NEGATIVE_INFINITY
+  );
+}
+
+function getProjectRecency(item: unknown) {
+  return (
+    getTimeField(item, 'endDate') ??
+    getTimeField(item, 'startDate') ??
+    Number.NEGATIVE_INFINITY
+  );
+}
+
+function getEvidenceRecency(item: unknown) {
+  return (
+    getTimeField(item, 'capturedAt') ??
+    getTimeField(item, 'occurredAt') ??
+    Number.NEGATIVE_INFINITY
+  );
+}
+
+function sortByRecency(
+  items: unknown[],
+  recencyOf: (item: unknown) => number,
+) {
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort(
+      (a, b) =>
+        recencyOf(b.item) -
+          recencyOf(a.item) ||
+        a.index - b.index,
+    )
+    .map((entry) => entry.item);
+}
+
+function pickMostRecent(
+  items: unknown[],
+  recencyOf: (item: unknown) => number,
+) {
+  if (items.length === 0) {
+    return null;
+  }
+
+  return sortByRecency(items, recencyOf)[0];
+}
+
+function toArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function pluralize(
+  count: number,
+  singular: string,
+  plural?: string,
+) {
+  if (count === 1) {
+    return singular;
+  }
+
+  return plural ?? `${singular}s`;
+}
+
+function getStringField(
+  item: unknown,
+  key: string,
+): string | null {
+  if (
+    typeof item !== 'object' ||
+    item === null
+  ) {
+    return null;
+  }
+
+  const value = (
+    item as Record<string, unknown>
+  )[key];
+
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+
+  return trimmed.length > 0
+    ? trimmed
+    : null;
+}
+
+function getBooleanField(
+  item: unknown,
+  key: string,
+) {
+  if (
+    typeof item !== 'object' ||
+    item === null
+  ) {
+    return false;
+  }
+
+  return (
+    (item as Record<string, unknown>)[key] ===
+    true
+  );
+}
+
+function getTimeField(
+  item: unknown,
+  key: string,
+): number | null {
+  const value = getStringField(item, key);
+
+  if (value === null) {
+    return null;
+  }
+
+  const time = new Date(value).getTime();
+
+  return Number.isNaN(time) ? null : time;
+}
+
+function getYearField(
+  item: unknown,
+  key: string,
+): number | null {
+  const time = getTimeField(item, key);
+
+  if (time === null) {
+    return null;
+  }
+
+  return new Date(time).getUTCFullYear();
 }
 
 function buildGraphModel(
@@ -1708,26 +2393,95 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
 
-  signalGrid: {
+  identityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+
+  identityAvatar: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primary,
+  },
+
+  identityInitials: {
+    color: colors.primaryText,
+    fontWeight: '700',
+  },
+
+  identityText: {
+    flex: 1,
+    minWidth: 0,
+  },
+
+  identityHeadline: {
+    marginTop: 2,
+  },
+
+  identityMeta: {
+    marginTop: 2,
+  },
+
+  snapshotGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
   },
 
-  signalCard: {
-    width: '48%',
-    minHeight: 130,
+  snapshotTile: {
+    flexGrow: 1,
+    flexBasis: '47%',
+    minWidth: 0,
     padding: spacing.md,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radius.md,
-    backgroundColor: colors.background,
-    justifyContent: 'center',
+    backgroundColor: colors.surface,
   },
 
-  signalDescription: {
+  snapshotTileLabel: {
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    fontSize: 11,
+    lineHeight: 14,
+  },
+
+  snapshotTileValue: {
     marginTop: spacing.xs,
-    lineHeight: 17,
+  },
+
+  snapshotTileLines: {
+    marginTop: spacing.sm,
+  },
+
+  snapshotTileCaption: {
+    fontSize: 11,
+    lineHeight: 14,
+    marginBottom: 2,
+  },
+
+  snapshotTileLine: {
+    fontSize: 13,
+    lineHeight: 18,
+  },
+
+  snapshotTileEmpty: {
+    marginTop: spacing.sm,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+
+  shapeText: {
+    marginTop: spacing.xs,
+    lineHeight: 24,
+  },
+
+  shapeFootnote: {
+    marginTop: spacing.sm,
   },
 
   skillList: {

@@ -36,6 +36,7 @@ import {
 
 import {
   getBooleanField,
+  getObjectField,
   getStringField,
   getTimeField,
   toArray,
@@ -48,6 +49,15 @@ import {
   type TimelineItem,
 } from '../../career/timeline';
 
+import {
+  buildEvidenceIndex,
+  getEvidenceForAchievement,
+  getEvidenceForExperience,
+  getEvidenceForProject,
+  getEvidenceForSkill,
+  type EvidenceIndex,
+} from '../../career/evidence';
+
 type GraphNodeType =
   | 'person'
   | 'skill'
@@ -57,7 +67,14 @@ type GraphNodeType =
   | 'achievement';
 
 type GraphNode = {
+  /** Node key within the graph, e.g. "skill-<uuid>". */
   id: string;
+  /*
+   * Stable database id of the entity this node represents: Skill.id,
+   * Experience.id, Project.id, Achievement.id or Evidence.id. Relationship
+   * lookups use this — never the label, which is a display value.
+   */
+  entityId: string;
   label: string;
   type: GraphNodeType;
   x: number;
@@ -208,6 +225,11 @@ export function CareerScreen() {
 
   const timeline = useMemo(
     () => buildCareerTimeline(graph),
+    [graph],
+  );
+
+  const evidenceIndex = useMemo(
+    () => buildEvidenceIndex(graph),
     [graph],
   );
 
@@ -668,6 +690,7 @@ export function CareerScreen() {
       <NodeDetailsModal
         node={selectedNode}
         graph={graph}
+        evidenceIndex={evidenceIndex}
         onClose={() => setSelectedNode(null)}
       />
     </Screen>
@@ -677,10 +700,12 @@ export function CareerScreen() {
 function NodeDetailsModal({
   node,
   graph,
+  evidenceIndex,
   onClose,
 }: {
   node: GraphNode | null;
   graph: CareerGraph;
+  evidenceIndex: EvidenceIndex;
   onClose: () => void;
 }) {
   if (!node) {
@@ -692,6 +717,7 @@ function NodeDetailsModal({
   const connections = getNodeConnections(
     node,
     graph,
+    evidenceIndex,
   );
 
   return (
@@ -1277,8 +1303,16 @@ function LegendItem({
 }
 
 type CapabilitySummary = {
+  /** Display label, taken from the first Skill row that produced this row. */
   name: string;
+  /** Experience/project records referencing this capability. */
   connections: number;
+  /*
+   * Stable Skill.id values behind this display row — normally one. More
+   * than one only when the graph genuinely holds separate Skill records
+   * that happen to read the same. Empty when the payload carried no id.
+   */
+  skillIds: string[];
 };
 
 type CareerSnapshot = {
@@ -1361,7 +1395,7 @@ function buildCareerSnapshot(
       graph.profile,
       'location',
     ),
-    initials: getInitials(name, graph.email),
+    initials: getInitials(name),
     capabilities,
     capabilityCount: capabilities.length,
     experienceCount: experiences.length,
@@ -1401,67 +1435,165 @@ function buildCareerSnapshot(
 // "Strongest" = most referenced across the graph, which is a count of real
 // records rather than an invented proficiency score. Ties keep the order
 // the API returned them in, so the list is stable between refreshes.
+/*
+ * Identity of a skill reference.
+ *
+ * Skill.id is the identity: two rows are the same capability when they
+ * point at the same Skill record, never because they read alike. The
+ * normalized name is only a fallback for payloads that omit the id, and it
+ * is namespaced so a name can never collide with a real id.
+ *
+ * The same shape covers UserSkill, ExperienceSkill and ProjectSkill rows —
+ * all three carry `skillId` plus a hydrated `skill`.
+ */
+function getSkillIdentity(item: unknown) {
+  const id =
+    getStringField(item, 'skillId') ??
+    getStringField(
+      getObjectField(item, 'skill'),
+      'id',
+    );
+
+  const name = getSkillName(item);
+
+  return {
+    id,
+    name,
+    key:
+      id ?? `name:${normalizeSkillName(name)}`,
+  };
+}
+
+function normalizeSkillName(name: string) {
+  return name.trim().toLowerCase();
+}
+
+/*
+ * "Strongest" = referenced by the most experience and project records.
+ *
+ * Two distinct layers, deliberately kept apart:
+ *
+ *   1. Identity — one entry per distinct Skill.id. All reference counting
+ *      happens here, so two different Skill records never merge just
+ *      because they share a name.
+ *
+ *   2. Display — rows that read identically are collapsed for
+ *      presentation, so the user never sees "Python" twice. The ids that
+ *      fed each row are retained on `skillIds`.
+ */
 function rankCapabilities(
   userSkills: unknown[],
   experiences: unknown[],
   projects: unknown[],
 ): CapabilitySummary[] {
-  const entries = new Map<
-    string,
-    CapabilitySummary & { index: number }
-  >();
+  type Entry = {
+    id: string | null;
+    name: string;
+    connections: number;
+    order: number;
+  };
+
+  const entries = new Map<string, Entry>();
 
   userSkills.forEach((item, index) => {
-    const name = getSkillName(item);
-    const key = name.toLowerCase();
+    const identity = getSkillIdentity(item);
 
-    if (entries.has(key)) {
+    if (entries.has(identity.key)) {
       return;
     }
 
-    entries.set(key, {
-      name,
+    entries.set(identity.key, {
+      id: identity.id,
+      name: identity.name,
       connections: 0,
-      index,
+      order: index,
     });
   });
 
-  // Only experiences and projects carry a hydrated skill relation; the
-  // evidence payload exposes join rows without skill names.
+  /*
+   * Only experiences and projects carry a skill relation. Each record
+   * counts at most once per capability.
+   */
   [...experiences, ...projects].forEach(
     (record) => {
       const seen = new Set<string>();
 
-      getNestedSkillNames(record).forEach(
-        (skillName) => {
-          const key = skillName.toLowerCase();
+      toArray(
+        getObjectField(record, 'skills'),
+      ).forEach((row) => {
+        const identity =
+          getSkillIdentity(row);
 
-          if (seen.has(key)) {
-            return;
-          }
+        if (seen.has(identity.key)) {
+          return;
+        }
 
-          seen.add(key);
+        seen.add(identity.key);
 
-          const entry = entries.get(key);
+        const entry = entries.get(
+          identity.key,
+        );
 
-          if (entry) {
-            entry.connections += 1;
-          }
-        },
-      );
+        if (entry) {
+          entry.connections += 1;
+        }
+      });
     },
   );
 
-  return [...entries.values()]
+  const display = new Map<
+    string,
+    CapabilitySummary & { order: number }
+  >();
+
+  entries.forEach((entry) => {
+    const displayKey = normalizeSkillName(
+      entry.name,
+    );
+
+    const existing = display.get(displayKey);
+
+    if (existing) {
+      existing.connections +=
+        entry.connections;
+
+      existing.order = Math.min(
+        existing.order,
+        entry.order,
+      );
+
+      if (
+        entry.id !== null &&
+        !existing.skillIds.includes(entry.id)
+      ) {
+        existing.skillIds.push(entry.id);
+      }
+
+      return;
+    }
+
+    display.set(displayKey, {
+      name: entry.name,
+      connections: entry.connections,
+      skillIds:
+        entry.id !== null ? [entry.id] : [],
+      order: entry.order,
+    });
+  });
+
+  return [...display.values()]
     .sort(
       (a, b) =>
         b.connections - a.connections ||
-        a.index - b.index,
+        a.order - b.order,
     )
-    .map(({ name, connections }) => ({
-      name,
-      connections,
-    }));
+    .map(
+      ({ name, connections, skillIds }) => ({
+        name,
+        connections,
+        skillIds,
+      }),
+    );
 }
 
 // Used only when the profile has no headline of its own. Built from a real
@@ -1516,10 +1648,12 @@ function getProfileName(
   return parts.join(' ');
 }
 
-function getInitials(
-  name: string | null,
-  email: string,
-) {
+/*
+ * Initials come from the profile name only. The payload carries no email
+ * (the User model has no such column), so there is nothing else to derive
+ * them from — a nameless profile gets a neutral mark rather than a guess.
+ */
+function getInitials(name: string | null) {
   if (name) {
     const initials = name
       .split(/\s+/)
@@ -1533,10 +1667,6 @@ function getInitials(
     if (initials.length > 0) {
       return initials;
     }
-  }
-
-  if (email.length > 0) {
-    return email.charAt(0).toUpperCase();
   }
 
   return '•';
@@ -1689,6 +1819,7 @@ function buildGraphModel(
   const nodes: GraphNode[] = [
     {
       id: 'person',
+      entityId: 'person',
       label: 'YOU',
       type: 'person',
       x: CENTER_X,
@@ -1751,6 +1882,7 @@ function buildGraphModel(
 
       const node: GraphNode = {
         id: `skill-${getNestedId(item, index)}`,
+        entityId: getSkillId(item, index),
         label: name,
         type: 'skill',
         ...placeNode(
@@ -1785,6 +1917,7 @@ function buildGraphModel(
 
       const node: GraphNode = {
         id: `project-${getNestedId(item, index)}`,
+        entityId: getNestedId(item, index),
         label: getProjectName(item),
         type: 'project',
         ...placeNode(
@@ -1826,6 +1959,7 @@ function buildGraphModel(
 
       const node: GraphNode = {
         id: `experience-${getNestedId(item, index)}`,
+        entityId: getNestedId(item, index),
         label: getExperienceTitle(item),
         type: 'experience',
         ...placeNode(
@@ -1861,6 +1995,7 @@ function buildGraphModel(
 
       const node: GraphNode = {
         id: `evidence-${getNestedId(item, index)}`,
+        entityId: getNestedId(item, index),
         label: getEvidenceTitle(item),
         type: 'evidence',
         ...placeNode(
@@ -1895,6 +2030,7 @@ function buildGraphModel(
 
       const node: GraphNode = {
         id: `achievement-${getNestedId(item, index)}`,
+        entityId: getNestedId(item, index),
         label: getAchievementTitle(item),
         type: 'achievement',
         ...placeNode(
@@ -1934,13 +2070,16 @@ function connectNestedSkills(
   }
 
   item.skills.forEach((relationship) => {
-    const skillName =
-      getSkillName(relationship);
+    const skillId = readLinkedSkillId(
+      relationship,
+    );
+
+    if (skillId === null) {
+      return;
+    }
 
     const matchingSkill = skills.find(
-      (skill) =>
-        skill.label.toLowerCase() ===
-        skillName.toLowerCase(),
+      (skill) => skill.entityId === skillId,
     );
 
     if (matchingSkill) {
@@ -1949,47 +2088,65 @@ function connectNestedSkills(
   });
 }
 
+/*
+ * Relationship lookup for the details sheet. Everything here resolves by
+ * stable database id — Skill.id, Experience.id, Project.id,
+ * Achievement.id, Evidence.id. Labels are rendered, never matched.
+ */
 function getNodeConnections(
   node: GraphNode,
   graph: CareerGraph,
+  evidenceIndex: EvidenceIndex,
 ): string[] {
   if (node.type === 'skill') {
     const connections: string[] = [];
 
-    graph.experiences.forEach((experience) => {
-      if (hasSkill(experience, node.label)) {
-        connections.push(
-          `Experience · ${getExperienceTitle(
+    toArray(graph.experiences).forEach(
+      (experience) => {
+        if (
+          hasLinkedSkillId(
             experience,
-          )}`,
-        );
-      }
-    });
+            node.entityId,
+          )
+        ) {
+          connections.push(
+            `Experience · ${getExperienceTitle(experience)}`,
+          );
+        }
+      },
+    );
 
-    graph.projects.forEach((project) => {
-      if (hasSkill(project, node.label)) {
-        connections.push(
-          `Project · ${getProjectName(project)}`,
-        );
-      }
-    });
+    toArray(graph.projects).forEach(
+      (project) => {
+        if (
+          hasLinkedSkillId(
+            project,
+            node.entityId,
+          )
+        ) {
+          connections.push(
+            `Project · ${getProjectName(project)}`,
+          );
+        }
+      },
+    );
 
-    graph.evidence.forEach((item) => {
-      if (hasNestedSkill(item, node.label)) {
-        connections.push(
-          `Evidence · ${getEvidenceTitle(item)}`,
-        );
-      }
+    getEvidenceForSkill(
+      evidenceIndex,
+      node.entityId,
+    ).forEach((record) => {
+      connections.push(
+        `Evidence · ${record.title}`,
+      );
     });
 
     return connections;
   }
 
   if (node.type === 'project') {
-    const project = graph.projects.find(
-      (item, index) =>
-        `project-${getNestedId(item, index)}` ===
-        node.id,
+    const project = findById(
+      graph.projects,
+      node.entityId,
     );
 
     if (!project) {
@@ -1997,21 +2154,34 @@ function getNodeConnections(
     }
 
     return [
-      ...getNestedSkillNames(project).map(
-        (skill) => `Skill · ${skill}`,
+      ...readRelationNames(
+        project,
+        'skills',
+        'skill',
+        'name',
+      ).map((name) => `Skill · ${name}`),
+      ...readRelationNames(
+        project,
+        'achievements',
+        'achievement',
+        'title',
+      ).map(
+        (name) => `Achievement · ${name}`,
       ),
-      ...getNestedAchievementNames(project).map(
-        (achievement) =>
-          `Achievement · ${achievement}`,
+      ...getEvidenceForProject(
+        evidenceIndex,
+        node.entityId,
+      ).map(
+        (record) =>
+          `Evidence · ${record.title}`,
       ),
     ];
   }
 
   if (node.type === 'experience') {
-    const experience = graph.experiences.find(
-      (item, index) =>
-        `experience-${getNestedId(item, index)}` ===
-        node.id,
+    const experience = findById(
+      graph.experiences,
+      node.entityId,
     );
 
     if (!experience) {
@@ -2020,58 +2190,158 @@ function getNodeConnections(
 
     return [
       getCompanyName(experience),
-      ...getNestedSkillNames(experience).map(
-        (skill) => `Skill · ${skill}`,
+      ...readRelationNames(
+        experience,
+        'skills',
+        'skill',
+        'name',
+      ).map((name) => `Skill · ${name}`),
+      ...getEvidenceForExperience(
+        evidenceIndex,
+        node.entityId,
+      ).map(
+        (record) =>
+          `Evidence · ${record.title}`,
       ),
     ];
   }
 
   if (node.type === 'evidence') {
-    const evidence = graph.evidence.find(
-      (item, index) =>
-        `evidence-${getNestedId(item, index)}` ===
-        node.id,
-    );
+    const record =
+      evidenceIndex.byId[node.entityId];
 
-    if (!evidence) {
+    if (!record) {
       return [];
     }
 
-    return [
-      ...getNestedSkillNames(evidence).map(
-        (skill) => `Skill · ${skill}`,
-      ),
-      ...getNestedProjectNames(evidence).map(
-        (project) => `Project · ${project}`,
-      ),
-    ];
-  }
-
-  if (node.type === 'achievement') {
-    const achievement = graph.achievements.find(
-      (item, index) =>
-        `achievement-${getNestedId(item, index)}` ===
-        node.id,
-    );
-
-    if (!achievement) {
-      return [];
-    }
-
-    return graph.evidence
-      .filter((item) =>
-        hasNestedAchievement(
-          item,
-          getAchievementTitle(achievement),
-        ),
-      )
+    /*
+     * The API now hydrates the name on each evidence join row, so these
+     * are real entity names rather than the placeholders the previous
+     * name-matching produced.
+     */
+    return record.links
+      .filter((link) => link.name !== null)
       .map(
-        (item) =>
-          `Evidence · ${getEvidenceTitle(item)}`,
+        (link) =>
+          `${getNodeTypeLabelForLink(link.entityType)} · ${link.name}`,
       );
   }
 
+  if (node.type === 'achievement') {
+    return getEvidenceForAchievement(
+      evidenceIndex,
+      node.entityId,
+    ).map(
+      (record) =>
+        `Evidence · ${record.title}`,
+    );
+  }
+
   return [];
+}
+
+function getNodeTypeLabelForLink(
+  entityType: string,
+) {
+  switch (entityType) {
+    case 'skill':
+      return 'Skill';
+
+    case 'experience':
+      return 'Experience';
+
+    case 'project':
+      return 'Project';
+
+    case 'achievement':
+      return 'Achievement';
+
+    default:
+      return 'Related';
+  }
+}
+
+/** Matches a record in a graph collection by its database id. */
+function findById(
+  items: unknown,
+  entityId: string,
+): unknown {
+  return (
+    toArray(items).find(
+      (item) =>
+        getStringField(item, 'id') ===
+        entityId,
+    ) ?? null
+  );
+}
+
+/*
+ * True when the record carries a join row pointing at this Skill.id.
+ * Reads the join row's own foreign key first, falling back to the
+ * hydrated relation's id — never the skill name.
+ */
+function hasLinkedSkillId(
+  item: unknown,
+  skillId: string,
+) {
+  return toArray(
+    getObjectField(item, 'skills'),
+  ).some(
+    (row) =>
+      readLinkedSkillId(row) === skillId,
+  );
+}
+
+function readLinkedSkillId(
+  row: unknown,
+): string | null {
+  return (
+    getStringField(row, 'skillId') ??
+    getStringField(
+      getObjectField(row, 'skill'),
+      'id',
+    )
+  );
+}
+
+/** Display names pulled from hydrated join rows. */
+function readRelationNames(
+  item: unknown,
+  arrayKey: string,
+  relationKey: string,
+  nameKey: string,
+): string[] {
+  return toArray(
+    getObjectField(item, arrayKey),
+  )
+    .map((row) =>
+      getStringField(
+        getObjectField(row, relationKey),
+        nameKey,
+      ),
+    )
+    .filter(
+      (name): name is string =>
+        name !== null,
+    );
+}
+
+/*
+ * A skill node represents the Skill, not the UserSkill join row it came
+ * from, so the entity id is the skill's.
+ */
+function getSkillId(
+  item: unknown,
+  fallback: number,
+) {
+  return (
+    getStringField(item, 'skillId') ??
+    getStringField(
+      getObjectField(item, 'skill'),
+      'id',
+    ) ??
+    `index-${fallback}`
+  );
 }
 
 function getNodeStyle(
@@ -2310,104 +2580,6 @@ function getAchievementTitle(
   }
 
   return 'Achievement';
-}
-
-function hasSkill(
-  item: unknown,
-  skillName: string,
-) {
-  return getNestedSkillNames(item)
-    .some(
-      (skill) =>
-        skill.toLowerCase() ===
-        skillName.toLowerCase(),
-    );
-}
-
-function hasNestedSkill(
-  item: unknown,
-  skillName: string,
-) {
-  return hasSkill(item, skillName);
-}
-
-function getNestedSkillNames(
-  item: unknown,
-): string[] {
-  if (
-    typeof item !== 'object' ||
-    item === null ||
-    !('skills' in item) ||
-    !Array.isArray(item.skills)
-  ) {
-    return [];
-  }
-
-  return item.skills.map(getSkillName);
-}
-
-function getNestedAchievementNames(
-  item: unknown,
-): string[] {
-  if (
-    typeof item !== 'object' ||
-    item === null ||
-    !('achievements' in item) ||
-    !Array.isArray(item.achievements)
-  ) {
-    return [];
-  }
-
-  return item.achievements.map(
-    getAchievementTitle,
-  );
-}
-
-function getNestedProjectNames(
-  item: unknown,
-): string[] {
-  if (
-    typeof item !== 'object' ||
-    item === null ||
-    !('projects' in item) ||
-    !Array.isArray(item.projects)
-  ) {
-    return [];
-  }
-
-  return item.projects.map(
-    getProjectNameFromRelationship,
-  );
-}
-
-function getProjectNameFromRelationship(
-  item: unknown,
-) {
-  if (
-    typeof item === 'object' &&
-    item !== null &&
-    'project' in item &&
-    typeof item.project === 'object' &&
-    item.project !== null &&
-    'name' in item.project &&
-    typeof item.project.name === 'string'
-  ) {
-    return item.project.name;
-  }
-
-  return getProjectName(item);
-}
-
-function hasNestedAchievement(
-  item: unknown,
-  achievementTitle: string,
-) {
-  return getNestedAchievementNames(item)
-    .some(
-      (achievement) =>
-        achievement.toLowerCase() ===
-        achievementTitle.toLowerCase(),
-    );
 }
 
 const styles = StyleSheet.create({

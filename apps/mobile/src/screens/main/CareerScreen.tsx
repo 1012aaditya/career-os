@@ -34,6 +34,20 @@ import {
   type CareerGraph,
 } from '../../api/career-graph';
 
+import {
+  getBooleanField,
+  getStringField,
+  getTimeField,
+  toArray,
+} from '../../career/graph-fields';
+
+import {
+  buildCareerTimeline,
+  getTimelineTypeLabel,
+  type CareerTimeline,
+  type TimelineItem,
+} from '../../career/timeline';
+
 type GraphNodeType =
   | 'person'
   | 'skill'
@@ -191,6 +205,11 @@ export function CareerScreen() {
 
     return buildCareerSnapshot(graph);
   }, [graph]);
+
+  const timeline = useMemo(
+    () => buildCareerTimeline(graph),
+    [graph],
+  );
 
   if (loading) {
     return (
@@ -556,6 +575,10 @@ export function CareerScreen() {
           </View>
         </Card>
 
+        <CareerTimelineSection
+          timeline={timeline}
+        />
+
         <View style={styles.section}>
           <AppText variant="heading">
             Strongest capabilities
@@ -786,6 +809,166 @@ function NodeDetailsModal({
         </Pressable>
       </Pressable>
     </Modal>
+  );
+}
+
+/*
+ * Minimal functional rendering of the timeline projection. Visual design is
+ * intentionally plain: this exists to verify the data, and the screen is
+ * scheduled for redesign against the approved design system.
+ */
+function CareerTimelineSection({
+  timeline,
+}: {
+  timeline: CareerTimeline;
+}) {
+  return (
+    <View style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <AppText variant="heading">
+          Career timeline
+        </AppText>
+
+        <AppText variant="caption" muted>
+          {timeline.counts.dated} dated
+          {timeline.counts.undated > 0
+            ? ` · ${timeline.counts.undated} undated`
+            : ''}
+        </AppText>
+      </View>
+
+      <Card>
+        {timeline.isEmpty ? (
+          <AppText variant="body" muted>
+            No career events yet.
+          </AppText>
+        ) : (
+          <View style={styles.timelineBody}>
+            {timeline.counts.dated === 0 ? (
+              <AppText variant="body" muted>
+                No career events have dates
+                yet.
+              </AppText>
+            ) : (
+              timeline.groups.map((group) => (
+                <View
+                  key={`year-${group.year}`}
+                  style={styles.timelineGroup}
+                >
+                  <AppText
+                    variant="bodyMedium"
+                    style={styles.timelineYear}
+                  >
+                    {group.year}
+                  </AppText>
+
+                  {group.items.map((item) => (
+                    <TimelineRow
+                      key={item.id}
+                      item={item}
+                    />
+                  ))}
+                </View>
+              ))
+            )}
+
+            {timeline.hasUndated ? (
+              <View
+                style={styles.timelineUndated}
+              >
+                <AppText
+                  variant="bodyMedium"
+                  style={styles.timelineYear}
+                >
+                  Undated
+                </AppText>
+
+                <AppText
+                  variant="caption"
+                  muted
+                  style={styles.timelineNote}
+                >
+                  Some career records don’t
+                  have dates yet, so they
+                  aren’t placed on the
+                  timeline.
+                </AppText>
+
+                {timeline.undated.map(
+                  (item) => (
+                    <TimelineRow
+                      key={item.id}
+                      item={item}
+                    />
+                  ),
+                )}
+              </View>
+            ) : null}
+
+            {timeline.excludedEvidenceCount >
+            0 ? (
+              <AppText
+                variant="caption"
+                muted
+                style={styles.timelineNote}
+              >
+                {`${timeline.excludedEvidenceCount} evidence ${
+                  timeline.excludedEvidenceCount ===
+                  1
+                    ? 'record only records'
+                    : 'records only record'
+                } when it was captured, not when it happened — kept off the timeline.`}
+              </AppText>
+            ) : null}
+          </View>
+        )}
+      </Card>
+    </View>
+  );
+}
+
+function TimelineRow({
+  item,
+}: {
+  item: TimelineItem;
+}) {
+  return (
+    <View style={styles.timelineRow}>
+      <View style={styles.timelineRowHead}>
+        <AppText variant="bodyMedium">
+          {item.title}
+        </AppText>
+
+        <AppText
+          variant="caption"
+          muted
+          style={styles.timelineType}
+        >
+          {getTimelineTypeLabel(item.type)}
+        </AppText>
+      </View>
+
+      {item.subtitle ? (
+        <AppText variant="caption" muted>
+          {item.subtitle}
+        </AppText>
+      ) : null}
+
+      {item.rangeLabel ? (
+        <AppText variant="caption" muted>
+          {item.rangeLabel}
+          {item.isCurrent ? ' · Current' : ''}
+        </AppText>
+      ) : null}
+
+      <AppText
+        variant="caption"
+        muted
+        style={styles.timelineProvenance}
+      >
+        {item.provenance.label}
+      </AppText>
+    </View>
   );
 }
 
@@ -1475,10 +1658,6 @@ function pickMostRecent(
   return sortByRecency(items, recencyOf)[0];
 }
 
-function toArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
 function pluralize(
   count: number,
   singular: string,
@@ -1489,64 +1668,6 @@ function pluralize(
   }
 
   return plural ?? `${singular}s`;
-}
-
-function getStringField(
-  item: unknown,
-  key: string,
-): string | null {
-  if (
-    typeof item !== 'object' ||
-    item === null
-  ) {
-    return null;
-  }
-
-  const value = (
-    item as Record<string, unknown>
-  )[key];
-
-  if (typeof value !== 'string') {
-    return null;
-  }
-
-  const trimmed = value.trim();
-
-  return trimmed.length > 0
-    ? trimmed
-    : null;
-}
-
-function getBooleanField(
-  item: unknown,
-  key: string,
-) {
-  if (
-    typeof item !== 'object' ||
-    item === null
-  ) {
-    return false;
-  }
-
-  return (
-    (item as Record<string, unknown>)[key] ===
-    true
-  );
-}
-
-function getTimeField(
-  item: unknown,
-  key: string,
-): number | null {
-  const value = getStringField(item, key);
-
-  if (value === null) {
-    return null;
-  }
-
-  const time = new Date(value).getTime();
-
-  return Number.isNaN(time) ? null : time;
 }
 
 function getYearField(
@@ -2482,6 +2603,53 @@ const styles = StyleSheet.create({
 
   shapeFootnote: {
     marginTop: spacing.sm,
+  },
+
+  timelineBody: {
+    gap: spacing.lg,
+  },
+
+  timelineGroup: {
+    gap: spacing.sm,
+  },
+
+  timelineYear: {
+    color: colors.textSecondary,
+  },
+
+  timelineRow: {
+    paddingLeft: spacing.md,
+    borderLeftWidth: 2,
+    borderLeftColor: colors.border,
+    gap: 2,
+  },
+
+  timelineRowHead: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+
+  timelineType: {
+    flexShrink: 0,
+  },
+
+  timelineProvenance: {
+    fontSize: 12,
+    lineHeight: 16,
+  },
+
+  timelineUndated: {
+    gap: spacing.sm,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+
+  timelineNote: {
+    fontSize: 12,
+    lineHeight: 16,
   },
 
   skillList: {

@@ -3,7 +3,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { useAuth } from '../auth/AuthProvider';
 import { SignInScreen } from '../screens/auth/SignInScreen';
-import { MainNavigator } from './MainNavigator';
+import { MainStackNavigator } from './MainStackNavigator';
 
 const Stack = createNativeStackNavigator();
 
@@ -20,7 +20,7 @@ export function RootNavigator() {
         {session ? (
           <Stack.Screen
             name="Main"
-            component={MainNavigator}
+            component={MainStackNavigator }
             options={{ headerShown: false }}
           />
         ) : (

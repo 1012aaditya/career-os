@@ -1,21 +1,37 @@
 import { ScrollView, StyleSheet, View } from 'react-native';
 import {
+  useNavigation,
+} from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+
+import {
   AppText,
+  Button,
   Card,
   Screen,
-  colors,
   spacing,
 } from '../../ui';
 
+type MainStackParamList = {
+  Tabs: undefined;
+  ResumeImport: undefined;
+};
+
+type HomeNavigationProp =
+  NativeStackNavigationProp<MainStackParamList>;
+
 export function HomeScreen() {
+  const navigation = useNavigation<HomeNavigationProp>();
+
   return (
     <Screen>
-       <ScrollView
-       contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}
-    >
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
         <View>
           <AppText variant="title">Good morning</AppText>
+
           <AppText variant="body" muted>
             Your career command center.
           </AppText>
@@ -31,9 +47,16 @@ export function HomeScreen() {
           </AppText>
 
           <AppText variant="body" muted>
-            Your career insights will appear here as Career OS learns about
-            your experience, skills, and goals.
+            Start by importing your resume. Career OS will turn it into a
+            structured career profile that you can review and improve.
           </AppText>
+
+          <View style={styles.cardButton}>
+            <Button
+              title="Import resume"
+              onPress={() => navigation.navigate('ResumeImport')}
+            />
+          </View>
         </Card>
 
         <View style={styles.section}>
@@ -59,9 +82,11 @@ export function HomeScreen() {
               <AppText variant="caption" muted>
                 SKILLS
               </AppText>
+
               <AppText variant="heading" style={styles.metric}>
                 —
               </AppText>
+
               <AppText variant="caption" muted>
                 No data yet
               </AppText>
@@ -71,9 +96,11 @@ export function HomeScreen() {
               <AppText variant="caption" muted>
                 EXPERIENCE
               </AppText>
+
               <AppText variant="heading" style={styles.metric}>
                 —
               </AppText>
+
               <AppText variant="caption" muted>
                 No data yet
               </AppText>
@@ -99,20 +126,29 @@ const styles = StyleSheet.create({
   content: {
     gap: spacing.lg,
   },
+
   cardTitle: {
     marginTop: spacing.sm,
     marginBottom: spacing.sm,
   },
+
+  cardButton: {
+    marginTop: spacing.md,
+  },
+
   cardText: {
     marginTop: spacing.sm,
   },
+
   section: {
     gap: spacing.sm,
   },
+
   grid: {
     flexDirection: 'row',
     gap: spacing.sm,
   },
+
   metric: {
     marginTop: spacing.sm,
     marginBottom: spacing.xs,

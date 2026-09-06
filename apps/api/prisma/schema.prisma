@@ -47,6 +47,7 @@ model User {
   evidence      Evidence[]
   goals         Goal[]
   resumeImports ResumeImport[]
+  educations    Education[]
 }
 
 model Profile {
@@ -63,6 +64,25 @@ model Profile {
   updatedAt DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Education {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @db.Uuid
+  institution  String
+  location     String?
+  degree       String?
+  fieldOfStudy String?
+  startDate    DateTime?
+  endDate      DateTime?
+  grade        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, startDate])
 }
 
 model Company {
@@ -88,7 +108,8 @@ model ResumeImport {
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user     User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  evidence Evidence[]
 
   @@index([userId])
   @@index([userId, status])
@@ -190,21 +211,23 @@ model Achievement {
 }
 
 model Evidence {
-  id          String             @id @default(uuid()) @db.Uuid
-  userId      String             @db.Uuid
-  sourceType  EvidenceSourceType
-  title       String
-  description String?
-  sourceUrl   String?
-  externalId  String?
-  occurredAt  DateTime?
-  capturedAt  DateTime           @default(now())
-  metadata    Json?
+  id             String             @id @default(uuid()) @db.Uuid
+  userId         String             @db.Uuid
+  resumeImportId String?            @db.Uuid
+  sourceType     EvidenceSourceType
+  title          String
+  description    String?
+  sourceUrl      String?
+  externalId     String?
+  occurredAt     DateTime?
+  capturedAt     DateTime           @default(now())
+  metadata       Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   user         User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resumeImport ResumeImport?         @relation(fields: [resumeImportId], references: [id], onDelete: SetNull)
   experiences  EvidenceExperience[]
   projects     EvidenceProject[]
   skills       EvidenceSkill[]
@@ -213,6 +236,7 @@ model Evidence {
   @@index([userId])
   @@index([userId, sourceType])
   @@index([userId, capturedAt])
+  @@index([resumeImportId])
 }
 
 model Goal {

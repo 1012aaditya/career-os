@@ -10,6 +10,7 @@ import {
   spacing,
 } from '../../ui';
 import { useAuth } from '../../auth/AuthProvider';
+import { GithubConnectionCard } from '../../github/GithubConnectionCard';
 import { supabase } from '../../lib/supabase';
 
 export function ProfileScreen() {
@@ -75,6 +76,8 @@ export function ProfileScreen() {
             </View>
           </Card>
         </View>
+
+        <GithubConnectionCard />
 
         <View style={styles.section}>
           <AppText variant="heading">Preferences</AppText>

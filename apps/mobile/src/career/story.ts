@@ -13,17 +13,22 @@
  * data, so no such claim can be made.
  *
  * Same graph in, same story out.
+ *
+ * Gaps — skills attached to nothing, contradictory dates — belong to the
+ * data-quality surface, not here. The story says what the graph holds; it
+ * does not tell the user what to fix.
  */
 
 import type { CareerGraph } from '../api/career-graph';
 
 import {
-  getBooleanField,
   getObjectField,
   getStringField,
   getTimeField,
   toArray,
 } from './graph-fields';
+
+import { getCareerState } from './data-quality';
 
 import {
   getExperienceTitle,
@@ -159,19 +164,6 @@ export function buildCareerStory(
     lines.push({
       id: 'connected',
       text: connected,
-    });
-  }
-
-  const unlinked = describeUnlinkedSkills(
-    userSkills,
-    experiences,
-    projects,
-  );
-
-  if (unlinked) {
-    lines.push({
-      id: 'unlinked',
-      text: unlinked,
     });
   }
 
@@ -383,7 +375,7 @@ function describeCurrentRole(
    */
   const currentRoles = experiences.filter(
     (item) =>
-      getBooleanField(item, 'isCurrent'),
+      getCareerState(item).state === 'current',
   );
 
   const current = [...currentRoles]
@@ -463,52 +455,6 @@ function describeConnectedWork(
   }
 
   return `${connected} of ${records.length} work records list the skills they used.`;
-}
-
-/*
- * Skills present on the profile that no work record references. Stated as
- * a gap in the graph, never as a gap in the person.
- */
-function describeUnlinkedSkills(
-  userSkills: unknown[],
-  experiences: unknown[],
-  projects: unknown[],
-): string | null {
-  if (userSkills.length === 0) {
-    return null;
-  }
-
-  const used = new Set<string>();
-
-  [...experiences, ...projects].forEach(
-    (record) => {
-      getLinkedSkillIds(record).forEach(
-        (skillId) => used.add(skillId),
-      );
-    },
-  );
-
-  /* Counted by identity, matching how the focus ranking dedupes. */
-  const unlinkedIds = new Set<string>();
-
-  userSkills.forEach((item) => {
-    const skillId = readSkillId(item);
-
-    if (
-      skillId !== null &&
-      !used.has(skillId)
-    ) {
-      unlinkedIds.add(skillId);
-    }
-  });
-
-  const unlinked = unlinkedIds.size;
-
-  if (unlinked === 0) {
-    return null;
-  }
-
-  return `${unlinked} ${plural(unlinked, 'skill')} ${unlinked === 1 ? 'is' : 'are'} not yet linked to any role or project.`;
 }
 
 /*

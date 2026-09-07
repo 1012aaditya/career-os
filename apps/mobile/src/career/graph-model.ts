@@ -230,6 +230,51 @@ export type GraphModel = {
  * subset. Ordering by when the skill was attached (then by id) makes the
  * selection reproducible without inventing a ranking.
  */
+/*
+ * Follows the ordering contract getGraph promises: newest first by the
+ * record's own date with undated rows LAST, then by creation, then by id.
+ * (Evidence adds the createdAt step the API omits; both are total orders
+ * and agree in practice, since capturedAt and createdAt share now().)
+ *
+ * Applied client-side as well so the model can never depend on transport
+ * order. Which records the capped map draws, and the angle each one sits
+ * at, are both index-derived — so an unstable payload order would silently
+ * change what the user sees between refreshes.
+ */
+function sortDatedRecords(
+  records: unknown[],
+  dateKey: string,
+): unknown[] {
+  return [...records].sort((a, b) => {
+    const aTime = getTimeField(a, dateKey);
+    const bTime = getTimeField(b, dateKey);
+
+    /* Undated rows sort last rather than leading the list. */
+    if (aTime === null || bTime === null) {
+      if (aTime !== bTime) {
+        return aTime === null ? 1 : -1;
+      }
+    } else if (aTime !== bTime) {
+      return bTime - aTime;
+    }
+
+    const aCreated =
+      getTimeField(a, 'createdAt') ?? 0;
+
+    const bCreated =
+      getTimeField(b, 'createdAt') ?? 0;
+
+    if (aCreated !== bCreated) {
+      return bCreated - aCreated;
+    }
+
+    const aId = getStringField(a, 'id') ?? '';
+    const bId = getStringField(b, 'id') ?? '';
+
+    return aId < bId ? -1 : aId > bId ? 1 : 0;
+  });
+}
+
 function sortSkillRecords(
   records: unknown[],
 ): unknown[] {
@@ -675,8 +720,9 @@ export function buildGraphModel(
       return added;
     });
 
-  const projectRecords = toArray(
-    graph?.projects,
+  const projectRecords = sortDatedRecords(
+    toArray(graph?.projects),
+    'startDate',
   );
 
   const projects = projectRecords
@@ -726,8 +772,9 @@ export function buildGraphModel(
       return node;
     });
 
-  const experienceRecords = toArray(
-    graph?.experiences,
+  const experienceRecords = sortDatedRecords(
+    toArray(graph?.experiences),
+    'startDate',
   );
 
   const experiences = experienceRecords
@@ -783,8 +830,9 @@ export function buildGraphModel(
       return node;
     });
 
-  const evidenceRecords = toArray(
-    graph?.evidence,
+  const evidenceRecords = sortDatedRecords(
+    toArray(graph?.evidence),
+    'capturedAt',
   );
 
   const evidence = evidenceRecords
@@ -826,8 +874,9 @@ export function buildGraphModel(
       return node;
     });
 
-  const achievementRecords = toArray(
-    graph?.achievements,
+  const achievementRecords = sortDatedRecords(
+    toArray(graph?.achievements),
+    'occurredAt',
   );
 
   achievementRecords

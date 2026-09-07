@@ -35,7 +35,6 @@ import {
 } from '../../api/career-graph';
 
 import {
-  getBooleanField,
   getObjectField,
   getStringField,
   getTimeField,
@@ -75,6 +74,12 @@ import {
   type GraphLens,
   type GraphNodeType,
 } from '../../career/graph-model';
+
+import {
+  buildDataQualityReport,
+  getCareerState,
+  type DataQualityReport,
+} from '../../career/data-quality';
 
 import {
   getEntityRelations,
@@ -167,6 +172,11 @@ export function CareerScreen() {
    */
   const story = useMemo(
     () => buildCareerStory(graph),
+    [graph],
+  );
+
+  const dataQuality = useMemo(
+    () => buildDataQualityReport(graph),
     [graph],
   );
 
@@ -695,6 +705,14 @@ export function CareerScreen() {
             ))}
           </Card>
         </View>
+
+        {dataQuality.isClean ? null : (
+          <View style={styles.section}>
+            <DataQualitySection
+              report={dataQuality}
+            />
+          </View>
+        )}
       </ScrollView>
 
       <NodeDetailsModal
@@ -751,6 +769,82 @@ function getEmptyRelationsText(
     case 'person':
       return null;
   }
+}
+
+/*
+ * Records that could use the user's attention.
+ *
+ * Deliberately not a score, a grade, or a completeness percentage — those
+ * invite optimising the number instead of the record, and a career is not
+ * a number. Each line states what is missing or what disagrees, and says
+ * nothing about whether the career itself is any good.
+ *
+ * Renders nothing at all when there is nothing to report.
+ */
+function DataQualitySection({
+  report,
+}: {
+  report: DataQualityReport;
+}) {
+  if (report.isClean) {
+    return null;
+  }
+
+  return (
+    <>
+      <View style={styles.sectionHeader}>
+        <AppText variant="heading">
+          Needs review
+        </AppText>
+
+        <AppText variant="caption" muted>
+          From your graph
+        </AppText>
+      </View>
+
+      <Card>
+        <View style={styles.qualityList}>
+          {report.issues.map((issue) => (
+            <View
+              key={issue.id}
+              style={styles.qualityRow}
+            >
+              <View
+                style={styles.qualityDot}
+              />
+
+              <View
+                style={styles.qualityText}
+              >
+                <AppText variant="body">
+                  {issue.message}
+                </AppText>
+
+                {issue.entities.length > 0 ? (
+                  <AppText
+                    variant="caption"
+                    muted
+                    style={styles.qualityMeta}
+                  >
+                    {issue.entities
+                      .slice(0, 3)
+                      .map(
+                        (entity) =>
+                          entity.label,
+                      )
+                      .join(', ')}
+                    {issue.entities.length > 3
+                      ? ` +${issue.entities.length - 3} more`
+                      : ''}
+                  </AppText>
+                ) : null}
+              </View>
+            </View>
+          ))}
+        </View>
+      </Card>
+    </>
+  );
 }
 
 function RelationGroupBlock({
@@ -2090,10 +2184,8 @@ function formatPeriod(
 
   const end = getYearField(item, 'endDate');
 
-  const isCurrent = getBooleanField(
-    item,
-    'isCurrent',
-  );
+  const isCurrent =
+    getCareerState(item).state === 'current';
 
   if (start !== null && isCurrent) {
     return `${start} — Present`;
@@ -2123,7 +2215,7 @@ function formatPeriod(
 function getExperienceRecency(
   item: unknown,
 ) {
-  if (getBooleanField(item, 'isCurrent')) {
+  if (getCareerState(item).state === 'current') {
     return Number.POSITIVE_INFINITY;
   }
 
@@ -2757,6 +2849,34 @@ const styles = StyleSheet.create({
 
   relationGroup: {
     marginBottom: spacing.md,
+  },
+
+  qualityList: {
+    gap: spacing.md,
+  },
+
+  qualityRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+  },
+
+  qualityDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    marginTop: 8,
+    backgroundColor: colors.textSecondary,
+  },
+
+  qualityText: {
+    flex: 1,
+  },
+
+  qualityMeta: {
+    marginTop: 2,
+    fontSize: 12,
+    lineHeight: 16,
   },
 
   sheetContext: {

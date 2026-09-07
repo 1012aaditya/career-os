@@ -17,12 +17,13 @@
 import type { CareerGraph } from '../api/career-graph';
 
 import {
-  getBooleanField,
   getObjectField,
   getStringField,
   getTimeField,
   toArray,
 } from './graph-fields';
+
+import { getCareerState } from './data-quality';
 
 export type TimelineItemType =
   | 'experience'
@@ -257,10 +258,13 @@ function buildExperienceItem(
   const start = readDate(record, 'startDate');
   const end = readDate(record, 'endDate');
 
-  const isCurrent = getBooleanField(
-    record,
-    'isCurrent',
-  );
+  /*
+   * Via getCareerState so an explicit end date always wins over the
+   * isCurrent flag. A row carrying both used to render "— Present" and
+   * hide the end date it actually has.
+   */
+  const isCurrent =
+    getCareerState(record).state === 'current';
 
   return {
     id: `experience:${readEntityId(record, index)}`,
@@ -535,7 +539,7 @@ function readLinkedProvenance(
     return {
       known: false,
       sources: [],
-      evidenceIds,
+      evidenceIds: [...evidenceIds].sort(),
       label: 'Source not recorded',
     };
   }
@@ -547,7 +551,8 @@ function readLinkedProvenance(
   return {
     known: true,
     sources: [...sources].sort(),
-    evidenceIds,
+    /* Sorted like `sources`: nested relations carry no API ordering. */
+    evidenceIds: [...evidenceIds].sort(),
     label: `From ${labels.join(', ')}`,
   };
 }

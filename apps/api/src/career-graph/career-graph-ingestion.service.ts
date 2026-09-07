@@ -389,11 +389,23 @@ export class CareerGraphIngestionService {
               experience.end_date,
             );
 
+          const rawEndDate =
+            experience.end_date?.trim() ?? '';
+
+          const saysOngoing =
+            this.isOngoingMarker(rawEndDate);
+
+          /*
+           * companyId is `string | undefined`. Prisma DROPS an undefined
+           * field from a where clause rather than matching NULL, so an
+           * experience with no company would otherwise match a row at ANY
+           * company and silently inherit that employer.
+           */
           let existingExperience =
             await tx.experience.findFirst({
               where: {
                 userId,
-                companyId,
+                companyId: companyId ?? null,
                 title,
                 startDate,
                 endDate,
@@ -412,8 +424,29 @@ export class CareerGraphIngestionService {
                   location,
                   startDate,
                   endDate,
-                  isCurrent:
-                    !experience.end_date,
+                  /*
+                   * Current only when the source SAYS so, or says nothing.
+                   *
+                   * Three distinct cases hide behind one boolean, and
+                   * conflating them fabricates career state either way:
+                   *
+                   *   - an explicit ongoing marker ("Present", "Current")
+                   *     is the source asserting the role is open;
+                   *   - no end date at all is the source omitting it, so
+                   *     treating the role as open is an inference — a
+                   *     reasonable one, and the resume convention;
+                   *   - an end date we simply could not parse ("2021 -
+                   *     2022", "Jun 2021 – Aug 2022", "N/A") is NOT
+                   *     evidence of anything. Those are usually ended
+                   *     roles, and marking them current would invent a
+                   *     job the user does not hold.
+                   *
+                   * The third case therefore yields endDate: null and
+                   * isCurrent: false — a record that states neither, which
+                   * the mobile data-quality projection surfaces for review
+                   * rather than guessing at.
+                   */
+                  isCurrent: saysOngoing || !rawEndDate,
                 },
               });
           }
@@ -662,13 +695,20 @@ export class CareerGraphIngestionService {
          * ------------------------------------------------------
          */
 
-        for (const experience of
-          experienceRecords) {
+        /*
+         * Deduplicated by id: the records array is appended on the match
+         * path as well as the create path, so two resume entries that
+         * resolve to the same row would otherwise issue two inserts with
+         * the same composite primary key, fail on the unique constraint,
+         * and roll back the entire import.
+         */
+        for (const experienceId of this.distinctIds(
+          experienceRecords,
+        )) {
           await tx.evidenceExperience.create({
             data: {
               evidenceId: evidence.id,
-              experienceId:
-                experience.id,
+              experienceId,
             },
           });
         }
@@ -679,13 +719,20 @@ export class CareerGraphIngestionService {
          * ------------------------------------------------------
          */
 
-        for (const project of
-          projectRecords) {
+        /*
+         * Deduplicated by id: the records array is appended on the match
+         * path as well as the create path, so two resume entries that
+         * resolve to the same row would otherwise issue two inserts with
+         * the same composite primary key, fail on the unique constraint,
+         * and roll back the entire import.
+         */
+        for (const projectId of this.distinctIds(
+          projectRecords,
+        )) {
           await tx.evidenceProject.create({
             data: {
               evidenceId: evidence.id,
-              projectId:
-                project.id,
+              projectId,
             },
           });
         }
@@ -696,13 +743,20 @@ export class CareerGraphIngestionService {
          * ------------------------------------------------------
          */
 
-        for (const achievement of
-          achievementRecords) {
+        /*
+         * Deduplicated by id: the records array is appended on the match
+         * path as well as the create path, so two resume entries that
+         * resolve to the same row would otherwise issue two inserts with
+         * the same composite primary key, fail on the unique constraint,
+         * and roll back the entire import.
+         */
+        for (const achievementId of this.distinctIds(
+          achievementRecords,
+        )) {
           await tx.evidenceAchievement.create({
             data: {
               evidenceId: evidence.id,
-              achievementId:
-                achievement.id,
+              achievementId,
             },
           });
         }
@@ -736,6 +790,53 @@ export class CareerGraphIngestionService {
         timeout: 120000,
         maxWait: 100000,
       },
+    );
+  }
+
+  /*
+   * Distinct ids in first-seen order. Order is stable because the records
+   * arrays are built by iterating the extraction in document order.
+   */
+  private distinctIds(
+    records: { id: string }[],
+  ) {
+    const seen = new Set<string>();
+
+    const ids: string[] = [];
+
+    for (const record of records) {
+      if (seen.has(record.id)) {
+        continue;
+      }
+
+      seen.add(record.id);
+      ids.push(record.id);
+    }
+
+    return ids;
+  }
+
+  /*
+   * End-date values that mean "still here". Deliberately a closed list:
+   * anything outside it is treated as unreadable rather than guessed at,
+   * because a wrong guess here invents current employment.
+   */
+  private static readonly ONGOING_MARKERS =
+    new Set([
+      'present',
+      'current',
+      'currently',
+      'now',
+      'ongoing',
+      'to date',
+      'till date',
+      'to present',
+      'till present',
+    ]);
+
+  private isOngoingMarker(value: string) {
+    return CareerGraphIngestionService.ONGOING_MARKERS.has(
+      value.toLowerCase(),
     );
   }
 

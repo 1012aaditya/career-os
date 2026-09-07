@@ -11,6 +11,21 @@ export class CareerGraphService {
     private readonly prisma: PrismaService,
   ) {}
 
+  /*
+   * Ordering contract.
+   *
+   * Every collection returned here is deterministically ordered, because
+   * the mobile graph draws only a capped slice of each one — an unstable
+   * order would change WHICH records the user sees between refreshes.
+   *
+   *   - Dated collections sort newest first with NULLS LAST. Postgres
+   *     defaults DESC to NULLS FIRST, which put undated records at the top
+   *     and let them consume the graph's capped slots ahead of real ones.
+   *   - Every ordering ends on a unique column, so ties can never resolve
+   *     differently between calls.
+   *   - userSkills is ordered by when the skill was attached; it carries
+   *     no date of its own and any other key would imply a ranking.
+   */
   async getGraph(userId: string) {
     const user =
       await this.prisma.user.findUnique({
@@ -18,9 +33,16 @@ export class CareerGraphService {
         include: {
           profile: true,
           educations: {
-            orderBy: {
-              startDate: 'desc',
-            },
+            orderBy: [
+              {
+                startDate: {
+                  sort: 'desc',
+                  nulls: 'last',
+                },
+              },
+              { createdAt: 'desc' },
+              { id: 'asc' },
+            ],
           },
           experiences: {
             include: {
@@ -46,9 +68,16 @@ export class CareerGraphService {
                 },
               },
             },
-            orderBy: {
-              startDate: 'desc',
-            },
+            orderBy: [
+              {
+                startDate: {
+                  sort: 'desc',
+                  nulls: 'last',
+                },
+              },
+              { createdAt: 'desc' },
+              { id: 'asc' },
+            ],
           },
           projects: {
             include: {
@@ -68,14 +97,30 @@ export class CareerGraphService {
                 },
               },
             },
-            orderBy: {
-              startDate: 'desc',
-            },
+            orderBy: [
+              {
+                startDate: {
+                  sort: 'desc',
+                  nulls: 'last',
+                },
+              },
+              { createdAt: 'desc' },
+              { id: 'asc' },
+            ],
           },
+          /*
+           * Previously unordered entirely, so Postgres was free to return
+           * skills in any order — which decided WHICH skills the capped
+           * graph drew and where they sat.
+           */
           userSkills: {
             include: {
               skill: true,
             },
+            orderBy: [
+              { createdAt: 'asc' },
+              { skillId: 'asc' },
+            ],
           },
           achievements: {
             include: {
@@ -85,9 +130,16 @@ export class CareerGraphService {
                 },
               },
             },
-            orderBy: {
-              occurredAt: 'desc',
-            },
+            orderBy: [
+              {
+                occurredAt: {
+                  sort: 'desc',
+                  nulls: 'last',
+                },
+              },
+              { createdAt: 'desc' },
+              { id: 'asc' },
+            ],
           },
           evidence: {
             include: {
@@ -150,9 +202,10 @@ export class CareerGraphService {
                 },
               },
             },
-            orderBy: {
-              capturedAt: 'desc',
-            },
+            orderBy: [
+              { capturedAt: 'desc' },
+              { id: 'asc' },
+            ],
           },
           goals: true,
         },

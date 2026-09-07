@@ -31,6 +31,17 @@ type AuthRequestRow = {
   createdAt: Date;
 };
 
+type SyncRunRow = {
+  id: string;
+  connectionId: string;
+  userId: string;
+  status: string;
+  startedAt: Date;
+  finishedAt: Date | null;
+  errorMessage: string | null;
+  stats: unknown;
+};
+
 type ConnectionRow = {
   id: string;
   userId: string;
@@ -62,6 +73,7 @@ function uniqueViolation(target: string[]) {
 export function createInMemoryPrisma() {
   const authRequests: AuthRequestRow[] = [];
   const connections: ConnectionRow[] = [];
+  const syncRuns: SyncRunRow[] = [];
 
   const oAuthAuthorizationRequest = {
     create: async ({ data }: { data: Omit<AuthRequestRow, 'id' | 'consumedAt' | 'createdAt'> }) => {
@@ -280,13 +292,106 @@ export function createInMemoryPrisma() {
     },
   };
 
+  /*
+   * The ledger. updateMany applies every clause the caller supplies,
+   * including the compare-and-swap on RUNNING and the staleness cutoff -
+   * a double that ignored them would let a closed run be reopened and
+   * would make the "no false SUCCEEDED" tests pass vacuously.
+   */
+  const externalSyncRun = {
+    create: async ({
+      data,
+      select,
+    }: {
+      data: Omit<
+        SyncRunRow,
+        'id' | 'startedAt' | 'finishedAt' | 'errorMessage' | 'stats'
+      >;
+      select?: Record<string, boolean>;
+    }) => {
+      const row: SyncRunRow = {
+        id: randomUUID(),
+        startedAt: new Date(),
+        finishedAt: null,
+        errorMessage: null,
+        stats: null,
+        ...data,
+      };
+
+      syncRuns.push(row);
+
+      return select ? { id: row.id } : row;
+    },
+
+    findFirst: async ({
+      where,
+    }: {
+      where: {
+        connectionId: string;
+        status: string;
+      };
+    }) =>
+      syncRuns.find(
+        (row) =>
+          row.connectionId ===
+            where.connectionId &&
+          row.status === where.status,
+      ) ?? null,
+
+    updateMany: async ({
+      where,
+      data,
+    }: {
+      where: {
+        id?: string;
+        connectionId?: string;
+        status?: string;
+        startedAt?: { lt: Date };
+      };
+      data: Partial<SyncRunRow>;
+    }) => {
+      const matches = syncRuns.filter((row) => {
+        if (where.id && row.id !== where.id) return false;
+        if (
+          where.connectionId &&
+          row.connectionId !== where.connectionId
+        ) {
+          return false;
+        }
+        if (
+          where.status &&
+          row.status !== where.status
+        ) {
+          return false;
+        }
+        if (
+          where.startedAt &&
+          !(
+            row.startedAt.getTime() <
+            where.startedAt.lt.getTime()
+          )
+        ) {
+          return false;
+        }
+        return true;
+      });
+
+      for (const row of matches) {
+        Object.assign(row, data);
+      }
+
+      return { count: matches.length };
+    },
+  };
+
   return {
     prisma: {
       oAuthAuthorizationRequest,
       externalConnection,
+      externalSyncRun,
     },
     /** Direct access so tests can inspect what was actually persisted. */
-    rows: { authRequests, connections },
+    rows: { authRequests, connections, syncRuns },
   };
 }
 

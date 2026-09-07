@@ -268,6 +268,109 @@ function sortDatedRecords(
 }
 
 /*
+ * Round-robins evidence across its sourceType groups so the capped map
+ * draws a mix of sources rather than whichever one synced last.
+ *
+ * A connector back-fills in a single pass, so ~40 GitHub rows land on one
+ * capturedAt - the sync's clock, not a career date. Under a pure recency
+ * sort those 40 hold every one of the five drawn slots and the resume the
+ * map was built around disappears from it. The disclosure line still
+ * reads "5 of 41", and it cannot repair a sample that represents only one
+ * source: the user reads a picture that says their resume is not in their
+ * graph.
+ *
+ * This is a PERMUTATION, never a filter. The angle each node sits at is
+ * derived from evidenceRecords.length, so dropping a row here would move
+ * every remaining node as well as under-representing the payload. The
+ * whole list is reordered and the existing slice still takes the first
+ * five; interleaving only far enough to fill the cap would mean returning
+ * a shorter list, which is the one thing this must not do.
+ *
+ * Order WITHIN a source is untouched - records are appended in the order
+ * sortDatedRecords produced, so capturedAt desc, then createdAt desc,
+ * then id asc all still hold inside every group.
+ *
+ * Group order is order of FIRST APPEARANCE, so the source holding the
+ * newest record leads and ordered[0] is still records[0]: the head of the
+ * map remains the newest evidence, which is what the recency sort
+ * promised. Ranking group names alphabetically instead would let a GITHUB
+ * group outrank a strictly newer RESUME one for a reason invisible on
+ * screen, binding node placement to the spelling of an enum rather than
+ * to the data.
+ *
+ * Round-robin rather than proportional allocation, because proportional
+ * IS the bug: five slots shared 40:1 round to five GitHub and zero
+ * resume. One slot per source per round is both the simpler rule and the
+ * only one that guarantees every source present reaches the drawn set
+ * before any source takes a second turn.
+ *
+ * A record with no sourceType forms its own group rather than being
+ * demoted. "Source not recorded" is already a first-class origin on the
+ * evidence sheet, and pushing those rows behind a bulk sync would
+ * recreate exactly the disappearance this exists to prevent.
+ */
+function interleaveBySourceType(
+  records: unknown[],
+): unknown[] {
+  /*
+   * A Map, not a plain object: Map iteration is insertion order for every
+   * key type, while an object reorders integer-like keys and cannot carry
+   * a null key at all. Insertion order here comes from one left-to-right
+   * pass over an already totally ordered list, so group order is derived
+   * from the input rather than from how the runtime stores keys.
+   */
+  const groups = new Map<
+    string | null,
+    unknown[]
+  >();
+
+  records.forEach((record) => {
+    const source = getStringField(
+      record,
+      'sourceType',
+    );
+
+    const bucket = groups.get(source) ?? [];
+
+    bucket.push(record);
+    groups.set(source, bucket);
+  });
+
+  /*
+   * One source, or none, makes the round-robin the identity. Returning
+   * the input untouched is what makes a single-source map provably the
+   * exact list it drew before this function existed.
+   */
+  if (groups.size <= 1) {
+    return records;
+  }
+
+  const buckets = [...groups.values()];
+
+  const longest = buckets.reduce(
+    (max, bucket) =>
+      Math.max(max, bucket.length),
+    0,
+  );
+
+  const ordered: unknown[] = [];
+
+  for (
+    let round = 0;
+    round < longest;
+    round += 1
+  ) {
+    buckets.forEach((bucket) => {
+      if (round < bucket.length) {
+        ordered.push(bucket[round]);
+      }
+    });
+  }
+
+  return ordered;
+}
+
+/*
  * Ordering by when the skill was attached, then by id. The map draws a
  * capped eight, and both WHICH eight and the angle each sits at are
  * index-derived, so an unstable order would silently redraw the map
@@ -832,10 +935,17 @@ export function buildGraphModel(
       return node;
     });
 
-  const evidenceRecords = sortDatedRecords(
-    toArray(graph?.evidence),
-    'capturedAt',
-  );
+  /*
+   * Balanced by source before the cap, so a bulk connector sync cannot
+   * take every drawn slot from the sources already on the map.
+   */
+  const evidenceRecords =
+    interleaveBySourceType(
+      sortDatedRecords(
+        toArray(graph?.evidence),
+        'capturedAt',
+      ),
+    );
 
   const evidence = evidenceRecords
     .slice(0, GRAPH_CAPS.evidence)

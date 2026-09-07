@@ -94,4 +94,25 @@ export class ResumeImportController {
       id,
     );
   }
+
+  /*
+   * Recovery path for an import that is CONFIRMED but never reached the
+   * graph — an ingestion that failed, or a process that died between the
+   * confirmation and the ingestion. Idempotent, so calling it on an import
+   * that is already ingested is a no-op that reports as much.
+   *
+   * confirm() ends in the same operation, so a user retrying from the
+   * review screen recovers too; this exists because a crash can strand an
+   * import without the user ever seeing an error to retry.
+   */
+  @Post(':id/ingest')
+  async ingest(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    return this.resumeImportService.ingest(
+      req.user.id,
+      id,
+    );
+  }
 }

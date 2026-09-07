@@ -223,14 +223,6 @@ export type GraphModel = {
 };
 
 /*
- * The API returns userSkills with no ORDER BY, so Postgres is free to
- * return them in any order. Without a stable key the map would draw an
- * arbitrary — and potentially different — eight skills on every refresh,
- * at different angles, while the disclosure claimed to describe a fixed
- * subset. Ordering by when the skill was attached (then by id) makes the
- * selection reproducible without inventing a ranking.
- */
-/*
  * Follows the ordering contract getGraph promises: newest first by the
  * record's own date with undated rows LAST, then by creation, then by id.
  * (Evidence adds the createdAt step the API omits; both are total orders
@@ -275,6 +267,16 @@ function sortDatedRecords(
   });
 }
 
+/*
+ * Ordering by when the skill was attached, then by id. The map draws a
+ * capped eight, and both WHICH eight and the angle each sits at are
+ * index-derived, so an unstable order would silently redraw the map
+ * between refreshes while the disclosure claimed a fixed subset.
+ *
+ * getGraph now orders userSkills the same way, but the sort is kept here
+ * too: the model must be a pure function of the graph's content, not of
+ * the query that happened to fetch it.
+ */
 function sortSkillRecords(
   records: unknown[],
 ): unknown[] {
@@ -928,6 +930,19 @@ export function buildGraphModel(
  * record, matched on Skill.id. A skill that exists in the payload but was
  * not drawn (beyond GRAPH_CAPS.skill) simply has no node to connect to and
  * is skipped — no phantom edge is created.
+ *
+ * Iterated over the DRAWN skill nodes rather than over the record's join
+ * rows. The set of edges is the same intersection either way, but the
+ * ORDER is not: walking the join rows put the edges in whatever order the
+ * payload carried them, and `skills` is a nested relation, so that order
+ * is the database's. Two payloads describing the same graph produced
+ * `edges` arrays that differed in position — the model was not
+ * reproducible, and `edges` is compared, snapshotted and painted in array
+ * order.
+ *
+ * The node array is already deterministic (sortSkillRecords, then a cap),
+ * so ordering the edges by it makes the whole model a pure function of the
+ * graph's content.
  */
 function connectSkillEdges(
   item: unknown,
@@ -940,25 +955,28 @@ function connectSkillEdges(
   ) => void,
   kind: GraphEdgeKind,
 ) {
-  toArray(
-    getObjectField(item, 'skills'),
-  ).forEach((relationship) => {
-    const skillId = readLinkedSkillId(
-      relationship,
-    );
+  const linkedSkillIds = new Set(
+    toArray(getObjectField(item, 'skills'))
+      .map((relationship) =>
+        readLinkedSkillId(relationship),
+      )
+      .filter(
+        (skillId): skillId is string =>
+          skillId !== null,
+      ),
+  );
 
-    if (skillId === null) {
-      return;
-    }
+  if (linkedSkillIds.size === 0) {
+    return;
+  }
 
-    const matchingSkill = skills.find(
-      (skill) => skill.entityId === skillId,
-    );
-
-    if (matchingSkill) {
+  skills.forEach((skill) => {
+    if (
+      linkedSkillIds.has(skill.entityId)
+    ) {
       addEdge(
         sourceNodeId,
-        matchingSkill.id,
+        skill.id,
         kind,
       );
     }

@@ -11,29 +11,35 @@ was not here, so it records the reasoning and not only the decision.
 
 ## Freeze status
 
-**The Career Graph's logic is freeze-ready. The repository is not.**
+**Frozen.** The four blockers are fixed, the confirm → ingest lifecycle is
+verified end to end against a real database, and the projections have
+regression tests that fail when the behaviour they describe regresses.
 
-Three things are true of the committed tree that have to be resolved before
-"frozen" means anything, and none of them is a Career Graph design problem:
+The blockers, and what closed them:
 
-1. **Nothing calls `ingestConfirmedResume`.** At `4388c8a` the only
-   references to it are its own definition and the module registration.
-   `confirm()` sets `status = CONFIRMED` and returns; no controller route
-   reaches ingestion. The entire ingestion service is unreachable, so no
-   confirmed resume has ever populated a graph.
-2. **`CONFIRMED` is a one-way door.** `confirm()` requires `NEEDS_REVIEW`,
-   and no route moves an import back out of `CONFIRMED`. Every resume
-   confirmed against this code is therefore permanently un-ingestable, and
-   the population grows for as long as the tree stays this way. Recovering
-   them needs a backfill or a re-ingest route.
-3. **Mobile does not build from a clean checkout.** `CareerScreen.tsx`
-   imports `react-native-svg`; `apps/mobile/package.json` at `4388c8a`
-   does not declare it. CI does not catch this: root `typecheck` runs
-   `pnpm -r typecheck` and the mobile package declares no `typecheck`
-   script, and CI runs no tests at all.
-
-The fixes for all three exist as uncommitted work in the working tree and
-were deliberately left there — see "Working tree" below.
+1. **Nothing called `ingestConfirmedResume`.** At `4388c8a` the only
+   references were its own definition and the module registration, so the
+   entire ingestion service was unreachable and no confirmed resume could
+   ever populate a graph. `confirm()` now ends in it, through
+   `ResumeImportModule` importing `CareerGraphModule`.
+2. **`CONFIRMED` was a one-way door.** `confirm()` required
+   `NEEDS_REVIEW`, and nothing moved an import back out of `CONFIRMED`, so
+   every resume confirmed against that code was permanently un-ingestable.
+   `confirm()` is now idempotent and `POST /resume-imports/:id/ingest`
+   exists — see "Lifecycle" below.
+3. **Mobile did not build from a clean checkout.** `CareerScreen.tsx`
+   imports `react-native-svg`, which `apps/mobile/package.json` did not
+   declare. Now declared at `15.15.4`, matching the lockfile, the installed
+   tree, `expo install --check` for SDK 57, and `RNSVG` in `Podfile.lock`.
+   The mobile package also gained a `typecheck` script, so CI's
+   `pnpm -r typecheck` stops skipping the whole app.
+4. **The database was a migration behind.** Found only by running against
+   it: `20260907150000_harden_career_graph_foundation` had never been
+   applied, so `ResumeImport.rawExtractionResult`, `Experience.endDateText`
+   and the `EvidenceEducation` table did not exist and the Career Graph
+   code could not run at all. Applied with `prisma migrate deploy`; the
+   migration is additive and rewrites nothing. Worth remembering that no
+   amount of code review would have found this — only execution did.
 
 ---
 
@@ -150,6 +156,148 @@ moment the winning request committed. A caller that reverts the import on
 failure would ask the user to retry an import already live in their graph.
 The ledger row is now read back — not assumed — and a `P2002` from any
 other constraint rethrows untouched.
+
+---
+
+## Lifecycle
+
+The problem: a resume must be confirmed and then ingested, and the two
+cannot share a transaction. The ingestion is its own long transaction
+across a dozen tables, and the confirmation has to be durable *before* it
+starts, or a crash loses the user's decision rather than merely delaying
+their graph.
+
+The first attempt at this — in the working tree before 6.9 — flipped the
+row to `CONFIRMED`, ingested, and on failure flipped it back to
+`NEEDS_REVIEW`. Both halves were wrong. The rollback discarded a
+confirmation the user had actually given, to report a failure that happened
+afterwards. And neither write shared a transaction with the ingestion, so a
+process death between them left `CONFIRMED` with nothing in the graph and
+no way back.
+
+**The states are made recoverable rather than atomic**, and no schema
+change is needed, because `CareerGraphIngestion` already records the only
+fact that was missing. The ledger row is written *last, inside* the
+ingestion transaction, so:
+
+> `CONFIRMED` with no ledger row = confirmed, not yet in the graph, safe to
+> retry.
+
+That is a precise, crash-safe, queryable state. From it:
+
+- **Confirmation is committed once and never reverted.** A compare-and-swap
+  moves `NEEDS_REVIEW → CONFIRMED`; nothing moves it back.
+- **`confirm()` is idempotent.** It accepts `NEEDS_REVIEW` *or* `CONFIRMED`
+  and ends in `ingest()`, so calling it again resumes exactly where a crash
+  left off.
+- **`ingest()` is idempotent**, guarded by three layers: a pre-transaction
+  ledger read, an in-transaction re-read, and the unique index itself with
+  a `P2002` readback. Repeats report `ALREADY_INGESTED` and write nothing.
+- **A failed ingestion records only *why*.** The status stays `CONFIRMED`.
+- **`POST /resume-imports/:id/ingest`** recovers an import stranded by a
+  crash the user never saw an error for.
+
+Two subtleties, both found by review rather than by writing it:
+
+- **A success must never be reported as a failure.** The write that clears
+  `errorMessage` sits *outside* the try. Inside it, an ingestion that
+  committed followed by a failed bookkeeping write would land in the catch
+  and stamp "ingestion failed" onto an import whose graph was already
+  built — the same false failure the `P2002` guard exists to prevent, one
+  layer up. `recordIngestionFailure` also skips the write when a ledger row
+  exists (a concurrent call may have ingested it), and swallows its own
+  errors so a broken database cannot replace the real cause with a
+  bookkeeping one.
+- **An import may be edited while `CONFIRMED` but not yet ingested.** The
+  review screen saves before it confirms, so without this a second attempt
+  failed on the *save* with "cannot be edited in status CONFIRMED" — the
+  retry path existed on the server and was unreachable from the app. It is
+  also right on its own terms: nothing is in the graph yet, so nothing can
+  disagree with an edit, and an ingestion that failed on bad data can only
+  be fixed by letting the user correct it. Once the ledger row exists the
+  import is immutable again.
+
+### Status reachability
+
+| Status | `confirm()` | `ingest()` | Reaches the graph? |
+|---|---|---|---|
+| `PENDING` | 409 | 409 | No — never reviewed |
+| `PROCESSING` | 409 | 409 | No — worker owns it |
+| `NEEDS_REVIEW` | CAS → `CONFIRMED` → ingest | 409 | Yes |
+| `CONFIRMED` | retry → ingest | Yes | Yes |
+| `FAILED` | 409 | 409 | No — only reachable from `PROCESSING`, so it was never confirmed |
+
+Every transition is compare-and-swap guarded, and `CONFIRMED` is terminal.
+No status can strand an import permanently.
+
+---
+
+## Tests
+
+There were none for the Career Graph before this milestone. The Phase 6.8
+report of "17 suites passed" was not supported by the tree — it held two
+auth specs, both failing on pre-existing assertions.
+
+**127 now: 101 mobile projection tests and 26 API lifecycle tests.**
+
+The mobile suite runs under plain vitest in Node. All seven modules in
+`apps/mobile/src/career/` are pure TypeScript whose only cross-boundary
+import is `import type`, erased before runtime, so no React Native
+transform, jest-expo preset or native mocking is needed. Fixtures are typed
+against the real `CareerGraph` contract, so a drift between the API's shape
+and the client's declared shape fails to compile before any test runs.
+
+Covered: determinism (including under reordered payloads and under
+truncation), timeline, story, evidence projection, education provenance,
+career state as fact vs inference, data-quality detection, relationship
+projection, graph lenses, caps and truncation disclosure, null and empty
+graphs, and multi-source (GitHub) readiness.
+
+The API suite covers what carries the correctness argument above: which
+status transitions are allowed, that a confirmation is never reverted, that
+a failure is recorded without being invented, that a *success* can never be
+recorded as a failure, that a bookkeeping write cannot mask the real error,
+and that edits follow the ledger.
+
+Two things worth stating about their quality, because a test suite that
+cannot fail is worse than none:
+
+- **Nothing mocks the code under test.** The mobile tests import and
+  execute the real modules. The API tests use the real
+  `ResumeImportService` with an in-memory store that enforces the
+  compare-and-swap, substituting only the ingestion transaction and
+  Supabase — neither of which is what those tests are about.
+- **They were mutation-tested.** Reverting each fix makes the
+  corresponding test fail: neutering `sortSkillRecords` fails the
+  truncation-subset test, restoring the old edge iteration fails the
+  determinism test, moving the bookkeeping write back inside the `try`
+  fails "does not report a completed ingestion as a failure", and removing
+  the error-swallowing fails "does not let the bookkeeping write mask the
+  real error". Two assertions that passed against a deliberately broken
+  implementation were rewritten until they did not.
+
+One invariant is enforced across the two apps: the `ONGOING_MARKERS` list
+is duplicated in ingestion and in `data-quality.ts` because no package
+spans them, and both files carry a comment saying they must change
+together. A comment cannot enforce that, so a test reads the API source and
+asserts every marker it finds is read as a stated fact by the mobile side.
+
+### Verified against a real database
+
+The full sequence was exercised against the live Postgres, driving the real
+service classes: upload → worker claim → worker completion → user
+confirmation → ingestion → graph retrieval. **32/32 checks**, including
+repeated confirmation, repeated ingestion, a crash-stranded `CONFIRMED`
+recovering through the ingest route, a failed ingestion that keeps the
+confirmation and records why, the same import succeeding once its data is
+repaired, the review screen's own retry sequence recovering a stranded
+import, three-way concurrent ingestion yielding exactly one ledger row with
+no false failure, zero duplicated composite relationships, identical
+ordering across repeated real queries, and cross-user access refused.
+
+A synthetic user was used and removed afterwards, along with the globally
+shared `Skill`/`Company` rows it created; the database was verified back to
+its prior row counts.
 
 ---
 
@@ -388,53 +536,67 @@ rather than crashing.
 
 ---
 
-## Test coverage — the largest outstanding risk
+## Remaining limitations
 
-**There are no Career Graph tests.** The repository contains two spec files
-and both are auth. The Phase 6.8 report of "17 suites passed" is not
-supported by this tree; the actual baseline is `Test Files 1 failed | 1
-passed (2)`, `Tests 2 failed | 6 passed (8)`, the two failures being the
-known pre-existing auth ones.
+Stated plainly, because a freeze that hides its gaps is worse than no
+freeze.
 
-So every determinism, provenance and career-state guarantee above rests on
-reading the code and on one-off scripted checks, not on anything that will
-fail if someone breaks it tomorrow.
-
-This is cheap to fix and should be done first. All seven modules in
-`apps/mobile/src/career/` are pure TypeScript with type-only imports — no
-React Native runtime — so they run under plain vitest in Node with no RN
-harness. The blocker is not technical: adding a test runner means editing
-`apps/mobile/package.json`, which currently carries unrelated uncommitted
-work, and Phase 6.9 declined to mix the two.
-
-Worth covering first: empty graph, shuffled nested collections, stated vs
-assumed current, conflicting dates, education provenance, repeated
-ingestion, and evidence link ordering.
+- **Repeated *uploads* of the same resume still duplicate.** Ingesting one
+  import twice is safe; uploading the same CV twice and confirming both
+  produces two sets of records, or silently drops one where the dedupe keys
+  collide. That is the deferred conflict model above, and it is the largest
+  known hole.
+- **Two different imports for the same user, ingested concurrently**, can
+  both miss the `findFirst` dedupe and both create — `Experience`,
+  `Project`, `Education` and `Achievement` have no unique constraint to
+  serialise on. Not reachable through a single `confirm()`; reachable if a
+  user confirms two uploads at once.
+- **`errorMessage` on a `CONFIRMED` import is not displayed.** The user
+  sees the failure in the alert raised at the time, and the retry works, so
+  the field is a durable diagnostic rather than a user-facing one. The only
+  screen that renders it is gated on `FAILED`.
+- **The simulator flow was not driven end to end.** The app builds, boots,
+  loads its bundle from Metro and renders with no redbox, and the bundle
+  was confirmed to contain no test or fixture code. Navigating to the
+  Career tab could not be automated in this environment: `idb` is not
+  installed and `osascript` lacks assistive access. The Career screen's
+  logic is covered by the projection tests instead.
+- **The mobile projections are tested; the screens are not.** Rendering one
+  would pull in React Native and a whole harness to test mostly layout.
+  What decides correctness — ordering, provenance, career state — lives in
+  the pure modules and is tested directly.
 
 ---
 
 ## Working tree
 
-Phase 6.9 committed only its own five files. These were already modified
-before the milestone began and were deliberately left alone, because each
-mixes pre-existing work with something the Career Graph needs:
+Two files remain modified and uncommitted, and were deliberately left that
+way. Both were dirty before this milestone began, neither is needed by any
+blocker, and neither could be isolated from the pre-existing edits inside
+it — so committing them would mean either mixing unrelated work into the
+freeze or rewriting someone else's changes.
 
-- `apps/api/src/resume-import/resume-import.service.ts` — contains the
-  ingestion wiring that fixes freeze blocker 1, mixed with reformatting.
-- `apps/api/src/resume-import/resume-import.module.ts` — imports
-  `CareerGraphModule` for that wiring.
-- `apps/mobile/package.json`, `pnpm-lock.yaml` — add `react-native-svg`,
-  which fixes freeze blocker 3.
-- `apps/mobile/src/navigation/MainStackNavigator.tsx`,
-  `apps/mobile/src/screens/ResumeReviewScreen.tsx` — typed navigation and
-  a cast.
-- Untracked: `apps/api/env`, `apps/api/tsconfig.build.tsbuildinfo`. Neither
-  should be committed; `tsconfig.build.tsbuildinfo` belongs in
-  `.gitignore`.
+- `apps/mobile/src/screens/ResumeReviewScreen.tsx` — the changes here are
+  not behavioural: trailing whitespace on three lines, indentation broken
+  around the `updateResumeImport` call (`setResumeImport` ends up at column
+  zero inside a function body), and two `as ResumeImport` casts. The casts
+  are the part worth attention: the screen declares its own local
+  `ResumeImport` with a structured `extractionResult`, while the API
+  client's is `unknown | null`, so the cast silences the compiler instead
+  of validating. If a stored extraction is not that shape, the review
+  screen renders empty rather than reporting anything. Worth reverting.
+- `apps/mobile/src/navigation/MainStackNavigator.tsx` — a useful
+  `MainStackParamList`, but it also drops the file's trailing newline, and
+  it is unrelated to the freeze.
 
-One hazard to fix when that wiring is committed: the working-tree
-`confirm()` flips to `CONFIRMED`, then ingests, then reverts on failure —
-all outside a transaction. A process death between the status write and the
-ingestion leaves the same dead end by a different route. The status flip
-belongs inside the ingestion transaction, or the revert needs to be a
-compensating transaction.
+Neither blocks anything. The retry path they might once have carried is
+handled server-side instead, precisely so this file did not have to be
+touched.
+
+Also untracked and deliberately not committed: `apps/api/env` (a stray
+one-byte file) and `apps/api/tsconfig.build.tsbuildinfo` (a TypeScript
+incremental-build artifact). Neither is matched by `.gitignore` — `dist/`
+is covered but `*.tsbuildinfo` is not, and `.env`/`.env.*` does not match a
+file named `env` — so both are one `git add .` away from being committed.
+Adding those two patterns is worth doing; this milestone did not, because
+it was asked not to modify `.gitignore`.

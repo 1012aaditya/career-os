@@ -281,7 +281,7 @@ describe('ExternalSyncRunService', () => {
       ).toBe('PARTIAL');
     });
 
-    it('counts a lost repository as scanned but records why', async () => {
+    it('refuses to call a run complete when a repository could not be read', async () => {
       const { service, store } = build();
 
       const run = await service.start({
@@ -297,7 +297,16 @@ describe('ExternalSyncRunService', () => {
         ]),
       );
 
-      expect(result.status).toBe('SUCCEEDED');
+      /*
+       * PARTIAL, not SUCCEEDED. This assertion was inverted until the
+       * 7.4 integration review: a run that could not read a repository
+       * did not gather complete data, and a run where EVERY repository
+       * 404'd would otherwise have reported total success having read
+       * nothing at all. ACCESS_LOST still retains the historical
+       * observation - that is the persistence layer's job - but it is not
+       * a successful scan.
+       */
+      expect(result.status).toBe('PARTIAL');
 
       const stats = store.rows.syncRuns[0]!
         .stats as {

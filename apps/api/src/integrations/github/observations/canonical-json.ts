@@ -51,6 +51,33 @@ function canonicalize(value: unknown): JsonValue {
   }
 
   if (typeof value === 'object') {
+    /*
+     * Plain objects only.
+     *
+     * Without this, a Date, Map or Set silently canonicalizes to {} - it
+     * has no own enumerable keys - and a Buffer canonicalizes to an index
+     * map of its bytes, {"0":103,"1":104,...}. The second one matters:
+     * it means binary would be faithfully PERSISTED rather than refused,
+     * and two separate credential-safety arguments elsewhere rest on the
+     * claim that this function rejects what it cannot represent. It did
+     * not. Now it does, and the claim is true.
+     *
+     * Found by review; not reachable through today's projection, which
+     * builds metadata from strings, numbers and nulls only. Closed anyway
+     * because an untrue safety property is worse than a missing one.
+     */
+    const prototype =
+      Object.getPrototypeOf(value);
+
+    if (
+      prototype !== Object.prototype &&
+      prototype !== null
+    ) {
+      throw new Error(
+        'Cannot serialize a non-plain object',
+      );
+    }
+
     const source = value as Record<
       string,
       unknown

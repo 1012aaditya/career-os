@@ -18,11 +18,12 @@ import type {
  * sync actually managed to read. Its whole job is to make an incomplete
  * run impossible to mistake for a complete one.
  *
- * The status is therefore NOT a parameter. finish() derives it from the
- * completeness of the observation it is given, so there is no code path -
- * present or future - through which a caller can hand this service a
- * partial scan and the word SUCCEEDED. A boolean argument would have been
- * simpler and would have lasted until the first person in a hurry.
+ * The status is therefore NOT a parameter, and it is not read from the
+ * caller's completeness block either. finish() recomputes it from the
+ * repositories in the observation, because a derivation that trusts a
+ * supplied count is only as good as the caller: "40 of 40 scanned" over
+ * forty NOT_SCANNED repositories used to yield SUCCEEDED. Deriving from
+ * the records themselves is what actually closes that path.
  */
 
 /*
@@ -130,9 +131,49 @@ export class ExternalSyncRunService {
     runId: string,
     observation: SyncObservation,
   ): Promise<{ status: string }> {
-    const complete = isCompleteScan(
-      observation.completeness,
-    );
+    /*
+     * Derived from the repositories themselves, not from the completeness
+     * block handed to us.
+     *
+     * The earlier version trusted observation.completeness.reposScanned.
+     * That made the guarantee only as good as the caller: a fabricated
+     * completeness saying "40 of 40 scanned" over forty NOT_SCANNED
+     * repositories produced SUCCEEDED. The point of deriving the status
+     * here was to make that unreachable, so the derivation has to start
+     * from evidence rather than from a claim.
+     *
+     * Three conditions, each one a way a run can be incomplete:
+     *
+     *   - every repository actually observed. NOT_SCANNED is budget or
+     *     rate limit; ACCESS_LOST is a repository we could not read. A run
+     *     where every repository 404'd gathered nothing, and reporting
+     *     that as SUCCEEDED would be the plainest possible false claim.
+     *   - no repository's commit walk truncated. Per-repository truncation
+     *     never reached the run status before, so a run whose every walk
+     *     hit the page ceiling reported SUCCEEDED over counts that were
+     *     all short of the truth.
+     *   - the listing itself not truncated, which means repositories we
+     *     never enumerated at all.
+     */
+    const observed = observation.repositories.filter(
+      (repository) =>
+        repository.completeness.commits ===
+        'DEFAULT_BRANCH_ONLY',
+    ).length;
+
+    const anyRepositoryTruncated =
+      observation.repositories.some(
+        (repository) =>
+          repository.completeness.truncated,
+      );
+
+    const complete =
+      isCompleteScan(observation.completeness) &&
+      !anyRepositoryTruncated &&
+      observed ===
+        observation.repositories.length &&
+      observed >=
+        observation.completeness.reposTotal;
 
     const stats: SyncRunStats = {
       completeness: observation.completeness,

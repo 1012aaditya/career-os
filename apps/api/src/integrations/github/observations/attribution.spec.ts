@@ -300,6 +300,41 @@ describe('canonicalJson', () => {
     ).toBe(canonicalJson({ a: 1 }));
   });
 
+  it('refuses non-plain objects that would silently misrepresent', () => {
+    /*
+     * Each of these has no own enumerable string keys, so before the
+     * prototype guard they canonicalized to {} - or, for a Buffer, to an
+     * index map of its bytes, which would have PERSISTED binary rather
+     * than refusing it.
+     */
+    expect(() =>
+      canonicalJson({ d: new Date() }),
+    ).toThrow('non-plain object');
+
+    expect(() =>
+      canonicalJson({ m: new Map([['a', 1]]) }),
+    ).toThrow('non-plain object');
+
+    expect(() =>
+      canonicalJson({ s: new Set([1]) }),
+    ).toThrow('non-plain object');
+
+    expect(() =>
+      canonicalJson({
+        b: Buffer.from('gho_secret'),
+      }),
+    ).toThrow('non-plain object');
+
+    /* A null-prototype bag is still plain data. */
+    expect(() =>
+      canonicalJson(
+        Object.assign(Object.create(null), {
+          a: 1,
+        }),
+      ),
+    ).not.toThrow();
+  });
+
   it('refuses values that cannot round-trip', () => {
     expect(() =>
       canonicalJson({ n: Number.NaN }),

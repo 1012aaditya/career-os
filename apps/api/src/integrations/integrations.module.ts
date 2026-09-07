@@ -13,6 +13,8 @@ import { GithubConnectionService } from './github/github-connection.service.js';
 import { GithubController } from './github/github.controller.js';
 import { GithubOAuthConfig } from './github/github-oauth.config.js';
 import { GithubOAuthService } from './github/github-oauth.service.js';
+import { GithubSyncService } from './github/github-sync.service.js';
+import { GithubEvidenceRepository } from './github/evidence/github-evidence.repository.js';
 import { OAuthStateService } from './oauth/oauth-state.service.js';
 
 /*
@@ -22,10 +24,15 @@ import { OAuthStateService } from './oauth/oauth-state.service.js';
  * lifecycle, and 7.3 the ingestion layer that turns GitHub responses into
  * normalized source observations.
  *
- * The ingestion services are registered but not yet reachable from any
- * route: 7.3 stops at observations, and nothing here writes an Evidence
- * row or touches the Career Graph. The endpoint that drives a sync is
- * 7.6's, and the observation-to-Evidence step is 7.4's.
+ * Phase 7.4 closes the loop: GithubEvidenceRepository writes Evidence
+ * rows, and GithubSyncService is the use case that runs a whole sync -
+ * connection, ingestion, projection, persistence, ledger - behind POST
+ * /v1/github/sync.
+ *
+ * What is still NOT here: nothing in this module writes a Project,
+ * Experience, Skill or UserSkill row, and nothing touches the Career
+ * Graph. Deciding that a repository is a project, or that a language is a
+ * skill somebody has, is interpretation and belongs to 7.5.
  */
 @Module({
   imports: [ConfigModule, PrismaModule, AuthModule],
@@ -40,12 +47,17 @@ import { OAuthStateService } from './oauth/oauth-state.service.js';
     GithubRestClient,
     GithubIngestionService,
     ExternalSyncRunService,
+    /* New in 7.4. Everything above was already registered by 7.1-7.3. */
+    GithubEvidenceRepository,
+    GithubSyncService,
   ],
   exports: [
     EncryptionService,
     GithubConnectionService,
     GithubIngestionService,
     ExternalSyncRunService,
+    GithubEvidenceRepository,
+    GithubSyncService,
   ],
 })
 export class IntegrationsModule {}

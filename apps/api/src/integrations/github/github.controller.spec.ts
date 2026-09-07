@@ -24,6 +24,7 @@ import { GithubConnectionService } from './github-connection.service.js';
 import { GithubController } from './github.controller.js';
 import { GithubOAuthConfig } from './github-oauth.config.js';
 import { GithubOAuthService } from './github-oauth.service.js';
+import { GithubSyncService } from './github-sync.service.js';
 
 const USER_A = '11111111-1111-4111-8111-111111111111';
 
@@ -92,6 +93,32 @@ async function createApp() {
         {
           provide: GithubConnectionService,
           useValue: connections,
+        },
+        /*
+         * A stub, because no test in this file exercises /sync - it
+         * predates that route and covers the connection lifecycle.
+         *
+         * Nest resolves controller dependencies eagerly, so adding the
+         * route to the controller makes this hand-built module fail to
+         * compile without a provider here. The alternative considered and
+         * rejected was marking the dependency @Optional() in production
+         * code: that would weaken the real wiring to accommodate a test,
+         * and a controller whose collaborator may silently be undefined is
+         * a worse thing to own than an explicit stub.
+         *
+         * It throws rather than returning a value, so a future test that
+         * reaches /sync through this module fails loudly instead of
+         * silently asserting against a fake success.
+         */
+        {
+          provide: GithubSyncService,
+          useValue: {
+            sync: async () => {
+              throw new Error(
+                'GithubSyncService is not wired in this test module',
+              );
+            },
+          } as unknown as GithubSyncService,
         },
         {
           provide: GithubOAuthService,

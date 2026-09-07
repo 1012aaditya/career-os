@@ -2,6 +2,9 @@ import {
   Controller,
   Delete,
   Get,
+  HttpException,
+  HttpStatus,
+  NotFoundException,
   Post,
   Query,
   Req,
@@ -16,6 +19,11 @@ import type { AuthenticatedRequest } from '../../auth/auth.guard.js';
 
 import { GithubConnectionService } from './github-connection.service.js';
 import { GithubOAuthService } from './github-oauth.service.js';
+import {
+  GithubConnectionUnavailableError,
+  GithubSyncFailedError,
+  GithubSyncService,
+} from './github-sync.service.js';
 
 /*
  * The GitHub connection lifecycle.
@@ -33,6 +41,7 @@ export class GithubController {
   constructor(
     private readonly oauth: GithubOAuthService,
     private readonly connections: GithubConnectionService,
+    private readonly sync: GithubSyncService,
   ) {}
 
   /**
@@ -134,5 +143,78 @@ export class GithubController {
     return this.connections.disconnect(
       req.user.id,
     );
+  }
+
+  /**
+   * Runs a sync for the caller's own connection.
+   *
+   * The user id comes from the guard and from nowhere else - there is no
+   * body, no query parameter and no path parameter on this route, so
+   * there is no shape in which a caller can name somebody else's account
+   * and no validation gap through which one could be smuggled.
+   *
+   * The response carries counts, flags, a status and two instants. It
+   * never carries the access token, the encrypted columns, an
+   * Authorization header, a raw GitHub payload, or an error object - see
+   * GithubSyncSummary, whose fields are enumerated for exactly that
+   * reason, and GithubSyncFailedError, which exists so that a failure has
+   * nothing to leak.
+   *
+   * Errors are mapped here rather than thrown as HTTP exceptions from the
+   * service, so the service stays a use case that a job runner or a
+   * future scheduled sync can call without an HTTP layer attached.
+   */
+  @Post('sync')
+  @UseGuards(AuthGuard)
+  async runSync(
+    @Req() req: AuthenticatedRequest,
+  ) {
+    try {
+      return await this.sync.sync(req.user.id);
+    } catch (error) {
+      if (
+        error instanceof
+        GithubConnectionUnavailableError
+      ) {
+        /*
+         * 404, and the same message whether the connection is absent,
+         * revoked or credential-less. The internal `reason` is not
+         * rendered: the fix is identical in all three cases - connect
+         * GitHub again - and a response that distinguishes them is a
+         * response that describes the state of a stored credential.
+         */
+        throw new NotFoundException(
+          'No active GitHub connection',
+        );
+      }
+
+      if (
+        error instanceof GithubSyncFailedError
+      ) {
+        /*
+         * 502 rather than 500: the run opened and was recorded as
+         * FAILED, and what went wrong was almost always upstream. The
+         * body carries the reason CODE - a value assembled from our own
+         * vocabulary - and never a message from a caught error.
+         */
+        throw new HttpException(
+          {
+            statusCode:
+              HttpStatus.BAD_GATEWAY,
+            status: 'FAILED',
+            error: error.reasonCode,
+            message: 'GitHub sync failed',
+          },
+          HttpStatus.BAD_GATEWAY,
+        );
+      }
+
+      /*
+       * Everything else - notably the ConflictException raised when a
+       * sync is already running for this connection - is already an
+       * HTTP exception with a safe message and is left alone.
+       */
+      throw error;
+    }
   }
 }

@@ -42,6 +42,22 @@ type SyncRunRow = {
   stats: unknown;
 };
 
+type EvidenceRow = {
+  id: string;
+  userId: string;
+  resumeImportId: string | null;
+  sourceType: string;
+  title: string;
+  description: string | null;
+  sourceUrl: string | null;
+  externalId: string | null;
+  occurredAt: Date | null;
+  capturedAt: Date;
+  metadata: unknown;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 type ConnectionRow = {
   id: string;
   userId: string;
@@ -74,6 +90,7 @@ export function createInMemoryPrisma() {
   const authRequests: AuthRequestRow[] = [];
   const connections: ConnectionRow[] = [];
   const syncRuns: SyncRunRow[] = [];
+  const evidence: EvidenceRow[] = [];
 
   const oAuthAuthorizationRequest = {
     create: async ({ data }: { data: Omit<AuthRequestRow, 'id' | 'consumedAt' | 'createdAt'> }) => {
@@ -384,14 +401,225 @@ export function createInMemoryPrisma() {
     },
   };
 
-  return {
-    prisma: {
-      oAuthAuthorizationRequest,
-      externalConnection,
-      externalSyncRun,
+  /*
+   * Evidence, with the (userId, sourceType, externalId) unique index
+   * enforced for real.
+   *
+   * That index is the actual idempotency boundary - a pre-check cannot be
+   * atomic - so a double that let duplicates through would make every
+   * re-sync test pass against an implementation with no guarantee at all.
+   * NULL externalId rows are treated as DISTINCT, matching Postgres, which
+   * is what lets resume evidence coexist without colliding.
+   */
+  const evidenceModel = {
+    findUnique: async ({
+      where,
+    }: {
+      where: {
+        userId_sourceType_externalId: {
+          userId: string;
+          sourceType: string;
+          externalId: string;
+        };
+      };
+    }) => {
+      const key = where.userId_sourceType_externalId;
+
+      return (
+        evidence.find(
+          (row) =>
+            row.userId === key.userId &&
+            row.sourceType === key.sourceType &&
+            row.externalId !== null &&
+            row.externalId === key.externalId,
+        ) ?? null
+      );
     },
+
+    findMany: async (args?: {
+      where?: {
+        userId?: string;
+        sourceType?: string;
+      };
+    }) =>
+      evidence.filter((row) => {
+        const w = args?.where;
+        if (!w) return true;
+        if (w.userId && row.userId !== w.userId) return false;
+        if (
+          w.sourceType &&
+          row.sourceType !== w.sourceType
+        ) {
+          return false;
+        }
+        return true;
+      }),
+
+    create: async ({
+      data,
+    }: {
+      data: Record<string, unknown>;
+    }) => {
+      const externalId =
+        (data['externalId'] as string | null) ?? null;
+
+      if (
+        externalId !== null &&
+        evidence.some(
+          (row) =>
+            row.userId === data['userId'] &&
+            row.sourceType === data['sourceType'] &&
+            row.externalId === externalId,
+        )
+      ) {
+        throw uniqueViolation([
+          'userId',
+          'sourceType',
+          'externalId',
+        ]);
+      }
+
+      const now = new Date();
+
+      const row = {
+        id: randomUUID(),
+        resumeImportId: null,
+        description: null,
+        sourceUrl: null,
+        externalId: null,
+        occurredAt: null,
+        capturedAt: now,
+        metadata: null,
+        createdAt: now,
+        updatedAt: now,
+        ...data,
+      } as EvidenceRow;
+
+      evidence.push(row);
+
+      return row;
+    },
+
+    update: async ({
+      where,
+      data,
+    }: {
+      where: { id: string };
+      data: Record<string, unknown>;
+    }) => {
+      const row = evidence.find(
+        (candidate) => candidate.id === where.id,
+      );
+
+      if (!row) {
+        throw new Error('Record not found');
+      }
+
+      Object.assign(row, data, {
+        updatedAt: new Date(),
+      });
+
+      return row;
+    },
+
+    upsert: async ({
+      where,
+      create,
+      update,
+    }: {
+      where: {
+        userId_sourceType_externalId: {
+          userId: string;
+          sourceType: string;
+          externalId: string;
+        };
+      };
+      create: Record<string, unknown>;
+      update: Record<string, unknown>;
+    }) => {
+      const key = where.userId_sourceType_externalId;
+
+      const existing = evidence.find(
+        (row) =>
+          row.userId === key.userId &&
+          row.sourceType === key.sourceType &&
+          row.externalId === key.externalId,
+      );
+
+      if (existing) {
+        Object.assign(existing, update, {
+          updatedAt: new Date(),
+        });
+
+        return existing;
+      }
+
+      return evidenceModel.create({
+        data: {
+          userId: key.userId,
+          sourceType: key.sourceType,
+          externalId: key.externalId,
+          ...create,
+        },
+      });
+    },
+
+    deleteMany: async (args?: {
+      where?: { userId?: string; sourceType?: string };
+    }) => {
+      let count = 0;
+
+      for (let i = evidence.length - 1; i >= 0; i -= 1) {
+        const row = evidence[i]!;
+        const w = args?.where;
+
+        if (
+          (!w?.userId || row.userId === w.userId) &&
+          (!w?.sourceType ||
+            row.sourceType === w.sourceType)
+        ) {
+          evidence.splice(i, 1);
+          count += 1;
+        }
+      }
+
+      return { count };
+    },
+
+    count: async (args?: {
+      where?: { userId?: string; sourceType?: string };
+    }) => (await evidenceModel.findMany(args)).length,
+  };
+
+  /*
+   * The interactive-transaction form, handing the callback the same
+   * client. There is no rollback here: an in-memory store cannot provide
+   * one, and pretending otherwise would let a test assert atomicity that
+   * the double is not actually delivering. Tests that care about a
+   * rollback must say so explicitly rather than trusting this.
+   */
+  const prisma = {
+    oAuthAuthorizationRequest,
+    externalConnection,
+    externalSyncRun,
+    evidence: evidenceModel,
+    $transaction: async (fn: unknown) =>
+      typeof fn === 'function'
+        ? await (fn as (tx: unknown) => unknown)(
+            prisma,
+          )
+        : fn,
+  };
+
+  return {
+    prisma,
     /** Direct access so tests can inspect what was actually persisted. */
-    rows: { authRequests, connections, syncRuns },
+    rows: {
+      authRequests,
+      connections,
+      syncRuns,
+      evidence,
+    },
   };
 }
 

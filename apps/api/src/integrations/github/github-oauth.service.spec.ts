@@ -590,7 +590,7 @@ describe('GithubOAuthService', () => {
         service.buildRedirectUrl('success'),
       );
 
-      expect(url.protocol).toBe('careeros:');
+      expect(url.protocol).toBe('com.careeros.mobile:');
       expect(
         url.searchParams.get('status'),
       ).toBe('success');
@@ -666,7 +666,7 @@ describe('GithubOAuthService', () => {
         expect(
           service.buildRedirectUrl(outcome),
         ).toMatch(
-          /^careeros:\/\/github-callback/,
+          /^com\.careeros\.mobile:\/\/github\/callback/,
         );
       }
     });

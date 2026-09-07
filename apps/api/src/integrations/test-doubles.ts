@@ -733,5 +733,5 @@ export const TEST_GITHUB_CONFIG = {
   GITHUB_OAUTH_CALLBACK_URL:
     'https://api.example.com/v1/github/callback',
   GITHUB_OAUTH_MOBILE_REDIRECT_URI:
-    'careeros://github-callback',
+    'com.careeros.mobile://github/callback',
 };

@@ -417,3 +417,121 @@ actually need reading. An account with more repositories than the budget
 reaches full coverage over several syncs instead of never. This holds
 *because* the listing is sorted by creation date — a second reason
 `sort=created` must not change.
+
+---
+
+## Phase 7.8 — final acceptance audit
+
+Audited at `8ec6bce` across the whole chain: OAuth, ExternalConnection,
+observations, incremental sync, Evidence, Career Graph projection, mobile.
+Four independent audits ran; what follows is what they found, what was
+fixed, and what is knowingly being carried forward.
+
+### Fixed during the audit
+
+**A truncated authored-activity listing produced hard zeros.** The
+cross-repository `/issues` walk is capped at ten pages of a hundred, and
+its `truncated` flag was never read. An account past ~1,000 authored
+issues and pull requests therefore got `0` written for every repository
+missing from the partial index - because a repository absent from a
+WORKING index genuinely has none - and the run could still close
+SUCCEEDED, since the request had succeeded. This was the completeness
+contract's first rule inverted on the user's own data, and the only
+reachable instance of it found. A truncated listing is now treated as
+"not established": prior counts are carried and the run reports PARTIAL.
+
+**Revalidated repositories were spending the scan budget.** They issue no
+request, but `scanned` incremented for them anyway, so an account larger
+than the budget revalidated the same first N for free on every run,
+exhausted the budget on them, and left the remainder NOT_SCANNED forever.
+The 7.6 amendment above claims the opposite as incremental sync's
+strongest justification. The budget now counts repositories read.
+
+**The mobile redirect URI had no scheme assertion.** `callbackUrl` was
+held to https while `mobileRedirectUri` was checked only for being
+parseable, so a misconfigured or tampered `https://attacker.example` would
+have turned our own callback into a 302 delivering a browser to an
+attacker mid-authorisation. Web schemes are now refused at construction,
+so such a deployment fails to boot rather than redirecting users. An exact
+match against the app's own scheme was considered and rejected: it would
+couple this service to one bundle identifier, breaking any staging build,
+while adding no security - an attacker who can already rewrite that
+variable to `someapp://` gains nothing from a link carrying only a status.
+
+**The callback URI was undocumented and the two written-down values
+disagreed.** `.env.example` was empty and the backend test double used a
+scheme and path the mobile parser rejects, so the backend suite passed
+green against a value the app would silently ignore. Production set to
+anything but the exact literal would strand every user in the browser on a
+dead link, with no error on either side. The literal is now documented.
+
+**Two mobile copy and state defects.** The consent sentence - the text a
+user reads immediately before granting OAuth access - named a product that
+exists nowhere else in the app. And a single dropped status request
+rendered the full disconnected state, offering "Connect GitHub" to an
+account that was already connected; it now reads "Status unavailable" and
+offers nothing until it knows.
+
+### Accepted residuals
+
+Each is real, none produces a false statement to a user today, and each
+has its smallest fix recorded so the deferral can be re-argued rather than
+rediscovered.
+
+**Concurrent syncs are guarded by a read-then-write.**
+`ExternalSyncRunService.start` does `findFirst` then `create` with no
+constraint behind it, so under READ COMMITTED two simultaneous requests
+can both open a run. Downstream, a concurrent persist can bypass the
+anti-erasure merge, because `merged` is only computed when the pre-read
+found a row. Requires two genuinely simultaneous syncs for one connection.
+Smallest fix: a partial unique index on `(connectionId) WHERE status =
+'RUNNING'` plus a P2002 catch in `start()`, which closes both. Deferred
+here only because an audit is the wrong phase to add a migration.
+
+**The anti-erasure guard covers commits, not authored counts.**
+`wouldEraseKnownCount` inspects `commitsAttributed` alone. Pull request
+and issue counts are protected by the ingestion-layer fallback, which
+needs the prior row to parse. Smallest fix: generalise the guard to all
+three counts.
+
+**`reposScanned` counts ACCESS_LOST as scanned.** The run status is
+derived independently and correctly, but the ratio stamped into every
+Evidence row can read "40 of 40" on a PARTIAL run. Smallest fix: exclude
+ACCESS_LOST and report it separately.
+
+**A PARTIAL sync is not visible after an app restart.** The mobile client
+holds the last run's status in memory only, and `GET /github/status` does
+not return it, so a relaunch shows an unqualified "Connected". Smallest
+fix: add the last run's status to the status response and seed from it.
+
+**Android below 12 can expose the authorization URL** to a hostile intent
+handler, and with it the live OAuth state. Largely closed on iOS and
+Android 12+, bounded by the ten-minute single-use state. Eliminating it
+means adopting an in-process auth session dependency; classified as an
+accepted residual rather than a blocker.
+
+**Two comments describe mechanisms that cannot occur.** The schema says
+the callback verifies the redirect URI it arrived on - it does not - and
+`canRevalidate`'s rationale describes a NOT_SCANNED persistence path that
+`evidenceForSync` withholds before it can happen. Both should have the
+comment amended or the code implemented; neither changes behaviour.
+
+### Not verified
+
+Stated plainly rather than implied by silence.
+
+- **Live GitHub OAuth: NOT VERIFIED.** No credentials exist in this
+  environment - client id, secret, both URLs and the encryption keys are
+  all absent, so the API cannot boot. No real authorisation, sync,
+  revocation or concurrent-run path has ever been exercised.
+- **iOS simulator: NOT VERIFIED.** `pod install` fails because `cmake` is
+  not installed. Xcode, simulators and CocoaPods are present, so this is a
+  toolchain gap rather than an architectural one.
+- **Native scheme registration: VERIFIED.** A prebuild was run and
+  `CFBundleURLSchemes: com.careeros.mobile` was confirmed in the generated
+  Info.plist, matching the bundle identifier.
+- **No mobile component, provider or deep-link code has ever executed.**
+  The mobile suite is Node-only with no React Native transform, so the
+  correctness of the connect flow, both callback paths, the auth race and
+  the double-tap guard rests on reading. Acceptance should include a
+  manual pass on a device build.

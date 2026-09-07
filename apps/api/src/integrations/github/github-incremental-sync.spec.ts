@@ -1805,3 +1805,131 @@ describe('the connection record', () => {
     ).toBeNull();
   });
 });
+
+/* ------------------------------------------------------------------ */
+
+/*
+ * Two contract violations found by the Phase 7.8 acceptance audit. Both
+ * were single-line defects against otherwise correct architecture, and
+ * both contradicted a claim the project had already written down - which
+ * is the worst kind, because the document stops being a description and
+ * starts being a promise nobody is checking.
+ */
+describe('7.8 audit regressions', () => {
+  /*
+   * The authored-activity walk is capped at ten pages of a hundred. An
+   * account past ~1,000 authored issues and pull requests got a PARTIAL
+   * index, and every repository missing from it was written with a hard
+   * 0 - because a repository absent from a WORKING index genuinely has
+   * none. The request succeeded, so nothing looked wrong.
+   *
+   * That is the completeness contract's first rule inverted, on the
+   * user's own data: "we did not look" rendered as "this person did
+   * nothing".
+   */
+  it('does not turn a truncated authored listing into zero counts', async () => {
+    const net = network({
+      repos: { body: [repo(1)] },
+      issues: { body: [issue(1), pull(1)] },
+    });
+
+    const { sync, store } = await build();
+
+    await sync.sync(USER, {
+      scannedAt: FIRST_SCAN,
+    });
+
+    expect(
+      metadataOf(evidenceFor(store, 1)).activity
+        .issuesAuthored,
+    ).toBe(1);
+
+    /*
+     * The second run's listing is truncated: a full page plus a next
+     * link, repeated past the page ceiling. repo-1 is absent from what
+     * came back.
+     */
+    net.script({
+      repos: { body: [repo(1)] },
+      issues: {
+        body: Array.from(
+          { length: 100 },
+          (_, i) => issue(9000 + i),
+        ),
+        headers: {
+          link: '<https://api.github.com/issues?page=2>; rel="next"',
+        },
+      },
+    });
+
+    const result = await sync.sync(USER, {
+      scannedAt: SECOND_SCAN,
+    });
+
+    const activity = metadataOf(
+      evidenceFor(store, 1),
+    ).activity;
+
+    /* Not zero. The prior count survives. */
+    expect(activity.issuesAuthored).toBe(1);
+    expect(activity.issuesAuthored).not.toBe(0);
+    expect(
+      activity.pullRequestsAuthored,
+    ).not.toBe(0);
+
+    /* And the run does not claim to have seen everything. */
+    expect(result.status).not.toBe('SUCCEEDED');
+  });
+
+  /*
+   * The scan budget must count repositories READ, not repositories
+   * considered.
+   *
+   * Revalidated repositories issue no request, but they used to spend
+   * budget anyway - so an account larger than the budget revalidated the
+   * same first N for free on every run, exhausted the budget on them, and
+   * left the remainder NOT_SCANNED forever. The decision record claimed
+   * the opposite as incremental sync's strongest justification.
+   */
+  it('lets coverage advance past the budget across successive syncs', async () => {
+    const all = [repo(1), repo(2), repo(3)];
+
+    const net = network({ repos: { body: all } });
+
+    const { sync, store } = await build();
+
+    /* Run 1: budget of two, so repo-3 is never looked at. */
+    await sync.sync(USER, {
+      scannedAt: FIRST_SCAN,
+      repositoryScanBudget: 2,
+    });
+
+    expect(store.rows.evidence).toHaveLength(2);
+
+    /*
+     * Run 2, same budget and nothing pushed. repo-1 and repo-2 revalidate
+     * without a request, so the budget is free for repo-3.
+     */
+    net.script({ repos: { body: all } });
+
+    await sync.sync(USER, {
+      scannedAt: SECOND_SCAN,
+      repositoryScanBudget: 2,
+    });
+
+    expect(store.rows.evidence).toHaveLength(3);
+
+    const third = metadataOf(
+      evidenceFor(store, 3),
+    );
+
+    expect(third.completeness.commits).toBe(
+      'DEFAULT_BRANCH_ONLY',
+    );
+
+    /* It was genuinely read, not carried. */
+    expect(
+      third.completeness.revalidatedBy,
+    ).toBeNull();
+  });
+});

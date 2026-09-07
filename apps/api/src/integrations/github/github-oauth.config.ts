@@ -125,11 +125,50 @@ export class GithubOAuthConfig {
       }
     }
 
+    let parsedMobile: URL;
+
     try {
-      new URL(mobileRedirectUri);
+      parsedMobile = new URL(mobileRedirectUri);
     } catch {
       throw new Error(
         'GITHUB_OAUTH_MOBILE_REDIRECT_URI must be an absolute URL',
+      );
+    }
+
+    /*
+     * The mobile redirect must be an application scheme, never one that
+     * can address a network origin.
+     *
+     * This value decides where a browser is sent at the exact moment it
+     * is carrying a completed OAuth flow. Left unasserted - as it was
+     * until this check - a misconfigured or tampered
+     * https://attacker.example would turn our own callback into a 302
+     * delivering the user there mid-authorisation: an excellent phishing
+     * position, arrived at through configuration rather than through any
+     * flaw in the flow itself.
+     *
+     * A custom scheme cannot reach a remote origin, so rejecting the web
+     * schemes closes the threat completely. An exact match against the
+     * app's own scheme was considered and rejected: it would couple this
+     * service to a single bundle identifier - breaking any staging build
+     * - while adding no security, because an attacker who can already
+     * rewrite this variable to someapp:// gains nothing from a link that
+     * carries only a status.
+     */
+    const NETWORK_SCHEMES = new Set([
+      'http:',
+      'https:',
+      'ws:',
+      'wss:',
+      'ftp:',
+      'file:',
+    ]);
+
+    if (
+      NETWORK_SCHEMES.has(parsedMobile.protocol)
+    ) {
+      throw new Error(
+        'GITHUB_OAUTH_MOBILE_REDIRECT_URI must use the application scheme, not a web scheme',
       );
     }
 

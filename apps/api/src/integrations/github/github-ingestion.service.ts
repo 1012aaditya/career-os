@@ -222,15 +222,36 @@ export class GithubIngestionService {
       }
 
       try {
-        repositories.push(
+        const observed =
           await this.scanRepository(
             input,
             shell,
             activityIndex,
-          ),
-        );
+          );
 
-        scanned += 1;
+        repositories.push(observed);
+
+        /*
+         * The budget counts repositories READ, not repositories
+         * considered. A revalidated repository issues no request, so
+         * spending budget on it would make the ceiling permanent: an
+         * account with more repositories than the budget would revalidate
+         * the same first sixty for free on every run, exhaust the budget
+         * on them, and leave the remainder NOT_SCANNED forever.
+         *
+         * Not spending it is what makes coverage progressive - the budget
+         * goes to repositories that actually need reading, so a large
+         * account converges over several syncs instead of never. That is
+         * the strongest argument for incremental sync, and until this it
+         * was asserted in the decision record and contradicted one line
+         * into the loop it described.
+         */
+        if (
+          observed.completeness.revalidatedBy ===
+          null
+        ) {
+          scanned += 1;
+        }
       } catch (error) {
         if (
           error instanceof GithubRequestError &&
@@ -328,6 +349,26 @@ export class GithubIngestionService {
        * would make every repository report 0 authored issues, which is a
        * claim we have not earned.
        */
+      return null;
+    }
+
+    /*
+     * A truncated listing is NOT an established count.
+     *
+     * This walk is capped at ten pages of a hundred, so an account with
+     * more than ~1,000 authored issues and pull requests gets a partial
+     * index - and every repository missing from it would then be written
+     * with a hard 0, because a repository absent from a WORKING index
+     * genuinely has none. That is the completeness contract's first rule
+     * inverted: "we did not look" rendered as "this person did nothing",
+     * on the user's own data, in the one place the rule is easiest to
+     * miss because the request succeeded.
+     *
+     * Returning null routes it down the same path as an outright failure:
+     * prior counts are carried, nothing becomes zero, and the run reports
+     * PARTIAL rather than SUCCEEDED.
+     */
+    if (page.truncated) {
       return null;
     }
 

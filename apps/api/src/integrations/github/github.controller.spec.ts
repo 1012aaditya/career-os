@@ -290,7 +290,7 @@ describe('GithubController', () => {
       );
 
       expect(location.protocol).toBe(
-        'careeros:',
+        'com.careeros.mobile:',
       );
       expect(
         location.searchParams.get('status'),

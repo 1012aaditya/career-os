@@ -51,11 +51,16 @@ import {
 
 import {
   buildEvidenceIndex,
+  formatEvidenceDate,
   getEvidenceForAchievement,
+  getEvidenceForEntities,
   getEvidenceForExperience,
   getEvidenceForProject,
   getEvidenceForSkill,
+  getSupportSummary,
+  type EvidenceEntityType,
   type EvidenceIndex,
+  type EvidenceView,
 } from '../../career/evidence';
 
 type GraphNodeType =
@@ -87,6 +92,38 @@ type GraphEdge = {
   from: string;
   to: string;
 };
+
+/*
+ * Education has no node on the Career Map (and no evidence relation in the
+ * schema), but it is still inspectable from the timeline, so the detail
+ * sheet works over a slightly wider set of types than the graph does.
+ */
+type DetailEntityType =
+  | GraphNodeType
+  | 'education';
+
+/*
+ * What the detail sheet is currently showing. Identity is always a list of
+ * stable database ids: normally one, but a capability row that merged two
+ * same-named Skill records carries both so its evidence is the union.
+ */
+type DetailSelection = {
+  type: DetailEntityType;
+  entityIds: string[];
+  label: string;
+  subtitle?: string;
+};
+
+function selectionFromNode(
+  node: GraphNode,
+): DetailSelection {
+  return {
+    type: node.type,
+    entityIds: [node.entityId],
+    label: node.label,
+    subtitle: node.subtitle,
+  };
+}
 
 const GRAPH_WIDTH = 390;
 const GRAPH_HEIGHT = 520;
@@ -174,8 +211,8 @@ export function CareerScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedNode, setSelectedNode] =
-    useState<GraphNode | null>(null);
+  const [selectedEntity, setSelectedEntity] =
+    useState<DetailSelection | null>(null);
   const [canvasWidth, setCanvasWidth] =
     useState(GRAPH_WIDTH);
 
@@ -507,7 +544,11 @@ export function CareerScreen() {
                     key={node.id}
                     onPress={() => {
                       if (!isPerson) {
-                        setSelectedNode(node);
+                        setSelectedEntity(
+                          selectionFromNode(
+                            node,
+                          ),
+                        );
                       }
                     }}
                   >
@@ -599,6 +640,7 @@ export function CareerScreen() {
 
         <CareerTimelineSection
           timeline={timeline}
+          onSelect={setSelectedEntity}
         />
 
         <View style={styles.section}>
@@ -616,9 +658,22 @@ export function CareerScreen() {
                 {capabilities
                   .slice(0, 8)
                   .map((capability, index) => (
-                    <View
+                    <Pressable
                       key={`${capability.name}-${index}`}
                       style={styles.skillRow}
+                      disabled={
+                        capability.skillIds
+                          .length === 0
+                      }
+                      onPress={() =>
+                        setSelectedEntity({
+                          type: 'skill',
+                          entityIds:
+                            capability.skillIds,
+                          label:
+                            capability.name,
+                        })
+                      }
                     >
                       <View
                         style={styles.skillIcon}
@@ -655,7 +710,7 @@ export function CareerScreen() {
                       >
                         →
                       </AppText>
-                    </View>
+                    </Pressable>
                   ))}
               </View>
             )}
@@ -688,34 +743,302 @@ export function CareerScreen() {
       </ScrollView>
 
       <NodeDetailsModal
-        node={selectedNode}
+        selection={selectedEntity}
         graph={graph}
         evidenceIndex={evidenceIndex}
-        onClose={() => setSelectedNode(null)}
+        onClose={() =>
+          setSelectedEntity(null)
+        }
       />
     </Screen>
   );
 }
 
+/*
+ * Evidence Mode: what supports this record, and where it came from.
+ *
+ * Vocabulary is limited to Supported / Unsupported — nothing in the
+ * current schema can honestly justify a stronger claim.
+ */
+function EvidenceSection({
+  selection,
+  evidenceIndex,
+}: {
+  selection: DetailSelection;
+  evidenceIndex: EvidenceIndex;
+}) {
+  if (selection.type === 'person') {
+    return null;
+  }
+
+  /*
+   * An evidence node is the source end of the chain, so it shows its own
+   * record rather than asking what supports it.
+   */
+  if (selection.type === 'evidence') {
+    const record =
+      evidenceIndex.byId[
+        selection.entityIds[0]
+      ];
+
+    return (
+      <View style={styles.evidenceSection}>
+        <View style={styles.sheetDivider} />
+
+        <AppText variant="caption" muted>
+          SOURCE
+        </AppText>
+
+        {record ? (
+          <EvidenceCard
+            record={record}
+            excludeEntityIds={[]}
+          />
+        ) : (
+          <AppText
+            variant="body"
+            muted
+            style={styles.evidenceEmpty}
+          >
+            This evidence record is no longer
+            in your graph.
+          </AppText>
+        )}
+      </View>
+    );
+  }
+
+  const entityType: EvidenceEntityType =
+    selection.type;
+
+  /*
+   * Union across ids so a merged capability row reports every record that
+   * supports any of the Skill rows behind it.
+   */
+  const evidence = getEvidenceForEntities(
+    evidenceIndex,
+    entityType,
+    selection.entityIds,
+  );
+
+  const summary = getSupportSummary(
+    evidenceIndex,
+    entityType,
+    selection.entityIds[0] ?? '',
+  );
+
+  const isSupported = evidence.length > 0;
+
+  return (
+    <View style={styles.evidenceSection}>
+      <View style={styles.sheetDivider} />
+
+      <View style={styles.evidenceHeader}>
+        <AppText variant="caption" muted>
+          EVIDENCE
+        </AppText>
+
+        <View
+          style={[
+            styles.supportBadge,
+            isSupported
+              ? styles.supportBadgeOn
+              : styles.supportBadgeOff,
+          ]}
+        >
+          <AppText
+            variant="caption"
+            style={styles.supportBadgeText}
+          >
+            {isSupported
+              ? 'Supported'
+              : 'Unsupported'}
+          </AppText>
+        </View>
+      </View>
+
+      {isSupported ? (
+        <View style={styles.evidenceList}>
+          {evidence.map((record) => (
+            <EvidenceCard
+              key={record.id}
+              record={record}
+              excludeEntityIds={
+                selection.entityIds
+              }
+            />
+          ))}
+        </View>
+      ) : (
+        <View style={styles.evidenceList}>
+          <AppText
+            variant="body"
+            muted
+            style={styles.evidenceEmpty}
+          >
+            No evidence is linked to this
+            record yet.
+          </AppText>
+
+          {summary.note ? (
+            <AppText
+              variant="caption"
+              muted
+            >
+              {summary.note}
+            </AppText>
+          ) : null}
+        </View>
+      )}
+    </View>
+  );
+}
+
+function EvidenceCard({
+  record,
+  excludeEntityIds,
+}: {
+  record: EvidenceView;
+  excludeEntityIds: string[];
+}) {
+  /*
+   * capturedAt is when the record was ingested; occurredAt is when the
+   * thing happened. They are labelled separately, and the occurred line is
+   * omitted entirely when the payload has no such date.
+   */
+  const captured = formatEvidenceDate(
+    record.capturedAt,
+  );
+
+  const occurred = formatEvidenceDate(
+    record.occurredAt,
+  );
+
+  /* Other records this same evidence backs, matched by id. */
+  const alsoSupports = record.links.filter(
+    (link) =>
+      link.name !== null &&
+      !excludeEntityIds.includes(
+        link.entityId,
+      ),
+  );
+
+  return (
+    <View style={styles.evidenceCard}>
+      <AppText variant="bodyMedium">
+        {record.title}
+      </AppText>
+
+      <AppText
+        variant="caption"
+        muted
+        style={styles.evidenceMeta}
+      >
+        {`Source · ${record.source.label}`}
+      </AppText>
+
+      {record.source.statement ? (
+        <AppText
+          variant="caption"
+          style={styles.evidenceStatement}
+        >
+          {record.source.statement}
+        </AppText>
+      ) : null}
+
+      {record.source.fileName ? (
+        <AppText
+          variant="caption"
+          muted
+          style={styles.evidenceMeta}
+        >
+          {`File · ${record.source.fileName}`}
+        </AppText>
+      ) : null}
+
+      {captured ? (
+        <AppText
+          variant="caption"
+          muted
+          style={styles.evidenceMeta}
+        >
+          {`Captured · ${captured}`}
+        </AppText>
+      ) : null}
+
+      {occurred ? (
+        <AppText
+          variant="caption"
+          muted
+          style={styles.evidenceMeta}
+        >
+          {`Occurred · ${occurred}`}
+        </AppText>
+      ) : null}
+
+      {record.description ? (
+        <AppText
+          variant="caption"
+          muted
+          style={styles.evidenceDescription}
+        >
+          {record.description}
+        </AppText>
+      ) : null}
+
+      {alsoSupports.length > 0 ? (
+        <View style={styles.evidenceLinks}>
+          <AppText variant="caption" muted>
+            Also supports
+          </AppText>
+
+          {alsoSupports
+            .slice(0, 6)
+            .map((link) => (
+              <AppText
+                key={`${link.entityType}-${link.entityId}`}
+                variant="caption"
+                muted
+                style={styles.evidenceMeta}
+              >
+                {`${getNodeTypeLabelForLink(link.entityType)} · ${link.name}`}
+              </AppText>
+            ))}
+
+          {alsoSupports.length > 6 ? (
+            <AppText
+              variant="caption"
+              muted
+              style={styles.evidenceMeta}
+            >
+              {`+${alsoSupports.length - 6} more`}
+            </AppText>
+          ) : null}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 function NodeDetailsModal({
-  node,
+  selection,
   graph,
   evidenceIndex,
   onClose,
 }: {
-  node: GraphNode | null;
+  selection: DetailSelection | null;
   graph: CareerGraph;
   evidenceIndex: EvidenceIndex;
   onClose: () => void;
 }) {
-  if (!node) {
+  if (!selection) {
     return null;
   }
 
-  const style = getNodeStyle(node.type);
+  const style = getNodeStyle(selection.type);
 
   const connections = getNodeConnections(
-    node,
+    selection,
     graph,
     evidenceIndex,
   );
@@ -737,6 +1060,10 @@ function NodeDetailsModal({
         >
           <View style={styles.sheetHandle} />
 
+          <ScrollView
+            style={styles.sheetScroll}
+            showsVerticalScrollIndicator={false}
+          >
           <View style={styles.sheetHeader}>
             <View
               style={[
@@ -752,20 +1079,20 @@ function NodeDetailsModal({
                   color: style.text,
                 }}
               >
-                {getTypeIcon(node.type)}
+                {getTypeIcon(selection.type)}
               </AppText>
             </View>
 
             <View style={styles.sheetTitleArea}>
               <AppText variant="heading">
-                {node.label}
+                {selection.label}
               </AppText>
 
               <AppText
                 variant="caption"
                 muted
               >
-                {getTypeLabel(node.type)}
+                {getTypeLabel(selection.type)}
               </AppText>
             </View>
 
@@ -815,6 +1142,11 @@ function NodeDetailsModal({
             </View>
           )}
 
+          <EvidenceSection
+            selection={selection}
+            evidenceIndex={evidenceIndex}
+          />
+
           <View style={styles.whyBox}>
             <AppText
               variant="caption"
@@ -832,6 +1164,7 @@ function NodeDetailsModal({
               evidence behind it.
             </AppText>
           </View>
+          </ScrollView>
         </Pressable>
       </Pressable>
     </Modal>
@@ -845,8 +1178,12 @@ function NodeDetailsModal({
  */
 function CareerTimelineSection({
   timeline,
+  onSelect,
 }: {
   timeline: CareerTimeline;
+  onSelect: (
+    selection: DetailSelection,
+  ) => void;
 }) {
   return (
     <View style={styles.section}>
@@ -892,6 +1229,7 @@ function CareerTimelineSection({
                     <TimelineRow
                       key={item.id}
                       item={item}
+                      onSelect={onSelect}
                     />
                   ))}
                 </View>
@@ -925,6 +1263,7 @@ function CareerTimelineSection({
                     <TimelineRow
                       key={item.id}
                       item={item}
+                      onSelect={onSelect}
                     />
                   ),
                 )}
@@ -955,11 +1294,26 @@ function CareerTimelineSection({
 
 function TimelineRow({
   item,
+  onSelect,
 }: {
   item: TimelineItem;
+  onSelect: (
+    selection: DetailSelection,
+  ) => void;
 }) {
   return (
-    <View style={styles.timelineRow}>
+    <Pressable
+      style={styles.timelineRow}
+      onPress={() =>
+        onSelect({
+          type: item.type,
+          entityIds: [item.entityId],
+          label: item.title,
+          subtitle:
+            item.subtitle ?? undefined,
+        })
+      }
+    >
       <View style={styles.timelineRowHead}>
         <AppText variant="bodyMedium">
           {item.title}
@@ -994,7 +1348,7 @@ function TimelineRow({
       >
         {item.provenance.label}
       </AppText>
-    </View>
+    </Pressable>
   );
 }
 
@@ -2093,23 +2447,37 @@ function connectNestedSkills(
  * stable database id — Skill.id, Experience.id, Project.id,
  * Achievement.id, Evidence.id. Labels are rendered, never matched.
  */
+/*
+ * Relationship lookup for the detail sheet. Everything resolves by stable
+ * database id — Skill.id, Experience.id, Project.id, Achievement.id,
+ * Evidence.id. Labels are rendered, never matched.
+ */
 function getNodeConnections(
-  node: GraphNode,
+  selection: DetailSelection,
   graph: CareerGraph,
   evidenceIndex: EvidenceIndex,
 ): string[] {
-  if (node.type === 'skill') {
+  const entityId =
+    selection.entityIds[0] ?? '';
+
+  if (selection.type === 'skill') {
     const connections: string[] = [];
+
+    const add = (line: string) => {
+      if (!connections.includes(line)) {
+        connections.push(line);
+      }
+    };
 
     toArray(graph.experiences).forEach(
       (experience) => {
         if (
-          hasLinkedSkillId(
+          hasAnyLinkedSkillId(
             experience,
-            node.entityId,
+            selection.entityIds,
           )
         ) {
-          connections.push(
+          add(
             `Experience · ${getExperienceTitle(experience)}`,
           );
         }
@@ -2119,34 +2487,34 @@ function getNodeConnections(
     toArray(graph.projects).forEach(
       (project) => {
         if (
-          hasLinkedSkillId(
+          hasAnyLinkedSkillId(
             project,
-            node.entityId,
+            selection.entityIds,
           )
         ) {
-          connections.push(
+          add(
             `Project · ${getProjectName(project)}`,
           );
         }
       },
     );
 
-    getEvidenceForSkill(
-      evidenceIndex,
-      node.entityId,
-    ).forEach((record) => {
-      connections.push(
-        `Evidence · ${record.title}`,
-      );
+    selection.entityIds.forEach((id) => {
+      getEvidenceForSkill(
+        evidenceIndex,
+        id,
+      ).forEach((record) => {
+        add(`Evidence · ${record.title}`);
+      });
     });
 
     return connections;
   }
 
-  if (node.type === 'project') {
+  if (selection.type === 'project') {
     const project = findById(
       graph.projects,
-      node.entityId,
+      entityId,
     );
 
     if (!project) {
@@ -2170,7 +2538,7 @@ function getNodeConnections(
       ),
       ...getEvidenceForProject(
         evidenceIndex,
-        node.entityId,
+        entityId,
       ).map(
         (record) =>
           `Evidence · ${record.title}`,
@@ -2178,10 +2546,10 @@ function getNodeConnections(
     ];
   }
 
-  if (node.type === 'experience') {
+  if (selection.type === 'experience') {
     const experience = findById(
       graph.experiences,
-      node.entityId,
+      entityId,
     );
 
     if (!experience) {
@@ -2198,7 +2566,7 @@ function getNodeConnections(
       ).map((name) => `Skill · ${name}`),
       ...getEvidenceForExperience(
         evidenceIndex,
-        node.entityId,
+        entityId,
       ).map(
         (record) =>
           `Evidence · ${record.title}`,
@@ -2206,17 +2574,17 @@ function getNodeConnections(
     ];
   }
 
-  if (node.type === 'evidence') {
+  if (selection.type === 'evidence') {
     const record =
-      evidenceIndex.byId[node.entityId];
+      evidenceIndex.byId[entityId];
 
     if (!record) {
       return [];
     }
 
     /*
-     * The API now hydrates the name on each evidence join row, so these
-     * are real entity names rather than the placeholders the previous
+     * The API hydrates the name on each evidence join row, so these are
+     * real entity names rather than the placeholders the old
      * name-matching produced.
      */
     return record.links
@@ -2227,16 +2595,20 @@ function getNodeConnections(
       );
   }
 
-  if (node.type === 'achievement') {
+  if (selection.type === 'achievement') {
     return getEvidenceForAchievement(
       evidenceIndex,
-      node.entityId,
+      entityId,
     ).map(
       (record) =>
         `Evidence · ${record.title}`,
     );
   }
 
+  /*
+   * Education carries no relations in the payload (no EvidenceEducation
+   * table, no skill join), so there is nothing to list.
+   */
   return [];
 }
 
@@ -2280,16 +2652,20 @@ function findById(
  * Reads the join row's own foreign key first, falling back to the
  * hydrated relation's id — never the skill name.
  */
-function hasLinkedSkillId(
+function hasAnyLinkedSkillId(
   item: unknown,
-  skillId: string,
+  skillIds: string[],
 ) {
   return toArray(
     getObjectField(item, 'skills'),
-  ).some(
-    (row) =>
-      readLinkedSkillId(row) === skillId,
-  );
+  ).some((row) => {
+    const linked = readLinkedSkillId(row);
+
+    return (
+      linked !== null &&
+      skillIds.includes(linked)
+    );
+  });
 }
 
 function readLinkedSkillId(
@@ -2345,9 +2721,18 @@ function getSkillId(
 }
 
 function getNodeStyle(
-  type: GraphNodeType,
+  type: DetailEntityType,
 ) {
   switch (type) {
+    case 'education':
+      return {
+        radius: 28,
+        fill: '#EDE9FE',
+        stroke: '#7C3AED',
+        text: '#5B21B6',
+        glow: '#7C3AED',
+      };
+
     case 'person':
       return {
         radius: 42,
@@ -2405,9 +2790,12 @@ function getNodeStyle(
 }
 
 function getTypeLabel(
-  type: GraphNodeType,
+  type: DetailEntityType,
 ) {
   switch (type) {
+    case 'education':
+      return 'EDUCATION';
+
     case 'skill':
       return 'SKILL';
 
@@ -2429,9 +2817,12 @@ function getTypeLabel(
 }
 
 function getTypeIcon(
-  type: GraphNodeType,
+  type: DetailEntityType,
 ) {
   switch (type) {
+    case 'education':
+      return '◈';
+
     case 'skill':
       return '✦';
 
@@ -2961,6 +3352,87 @@ const styles = StyleSheet.create({
 
   noConnections: {
     marginTop: spacing.md,
+  },
+
+  sheetScroll: {
+    maxHeight: 460,
+  },
+
+  evidenceHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+
+  evidenceSection: {
+    marginTop: 0,
+  },
+
+  supportBadge: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+  },
+
+  supportBadgeOn: {
+    backgroundColor: '#DCFCE7',
+    borderColor: '#16A34A',
+  },
+
+  supportBadgeOff: {
+    backgroundColor: colors.muted,
+    borderColor: colors.border,
+  },
+
+  supportBadgeText: {
+    fontWeight: '700',
+    fontSize: 12,
+    lineHeight: 16,
+  },
+
+  evidenceList: {
+    marginTop: spacing.md,
+    gap: spacing.sm,
+  },
+
+  evidenceEmpty: {
+    marginBottom: spacing.xs,
+  },
+
+  evidenceCard: {
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    gap: 2,
+  },
+
+  evidenceMeta: {
+    fontSize: 12,
+    lineHeight: 17,
+  },
+
+  evidenceStatement: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: colors.success,
+  },
+
+  evidenceDescription: {
+    marginTop: spacing.xs,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+
+  evidenceLinks: {
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    gap: 2,
   },
 
   whyBox: {

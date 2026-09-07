@@ -320,6 +320,38 @@ export function getEvidenceForEntity(
  * ----------------------------------------------------------------------
  */
 
+/*
+ * Evidence for several ids of one type, deduplicated by evidence id and
+ * kept in index order. A capability row that merged two same-named Skill
+ * records reports the union of what supports either.
+ */
+export function getEvidenceForEntities(
+  index: EvidenceIndex,
+  entityType: EvidenceEntityType,
+  entityIds: string[],
+): EvidenceView[] {
+  const seen = new Set<string>();
+
+  const out: EvidenceView[] = [];
+
+  entityIds.forEach((entityId) => {
+    getEvidenceForEntity(
+      index,
+      entityType,
+      entityId,
+    ).forEach((record) => {
+      if (seen.has(record.id)) {
+        return;
+      }
+
+      seen.add(record.id);
+      out.push(record);
+    });
+  });
+
+  return out;
+}
+
 export function getSupportState(
   index: EvidenceIndex,
   entityType: EvidenceEntityType,
@@ -680,6 +712,44 @@ function readSource(
  * HELPERS
  * ----------------------------------------------------------------------
  */
+
+const MONTH_LABELS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+/*
+ * Formats a timestamp the payload actually carries. Returns null for a
+ * missing or unparseable value — a date is never substituted or guessed,
+ * and callers are expected to omit the line entirely.
+ */
+export function formatEvidenceDate(
+  value: string | null,
+): string | null {
+  if (value === null) {
+    return null;
+  }
+
+  const time = new Date(value).getTime();
+
+  if (Number.isNaN(time)) {
+    return null;
+  }
+
+  const date = new Date(time);
+
+  return `${date.getUTCDate()} ${MONTH_LABELS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
+}
 
 function push(
   target: Record<string, string[]>,

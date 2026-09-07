@@ -1,4 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import {
+  Injectable,
+  Optional,
+} from '@nestjs/common';
 
 import { GITHUB_API_BASE_URL } from './github-oauth.config.js';
 
@@ -157,6 +160,14 @@ export class GithubRestClient {
    * somebody would eventually delete it.
    */
   constructor(
+    /*
+     * Nest reads the emitted paramtype for this argument and finds
+     * `Function` - Sleep is a type alias, not an injectable class - so
+     * without @Optional it looks for a provider under that token and the
+     * whole application fails to bootstrap. Optional makes it pass
+     * undefined instead, which is what lets the default below apply.
+     */
+    @Optional()
     private readonly sleep: Sleep = (ms) =>
       new Promise((resolve) =>
         setTimeout(resolve, ms),

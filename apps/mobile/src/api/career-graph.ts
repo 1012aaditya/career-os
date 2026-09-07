@@ -53,6 +53,12 @@ export type Profile = {
   updatedAt: IsoDateString;
 };
 
+export type EducationEvidenceLink = {
+  evidenceId: string;
+  educationId: string;
+  evidence: EvidenceRecord;
+};
+
 export type Education = {
   id: string;
   userId: string;
@@ -65,6 +71,7 @@ export type Education = {
   grade: string | null;
   createdAt: IsoDateString;
   updatedAt: IsoDateString;
+  evidence: EducationEvidenceLink[];
 };
 
 export type Company = {
@@ -190,6 +197,12 @@ export type Experience = {
   location: string | null;
   startDate: IsoDateString | null;
   endDate: IsoDateString | null;
+  /*
+   * The end date exactly as the source wrote it. Distinguishes a source
+   * that stated the role is ongoing from one that simply omitted an end
+   * date — isCurrent alone cannot.
+   */
+  endDateText: string | null;
   isCurrent: boolean;
   createdAt: IsoDateString;
   updatedAt: IsoDateString;
@@ -257,6 +270,12 @@ export type EvidenceProjectRef = {
   project: Pick<ProjectRecord, 'id' | 'name'>;
 };
 
+export type EvidenceEducationRef = {
+  evidenceId: string;
+  educationId: string;
+  education: Pick<Education, 'id' | 'institution'>;
+};
+
 export type EvidenceAchievementRef = {
   evidenceId: string;
   achievementId: string;
@@ -280,6 +299,7 @@ export type Evidence = EvidenceRecord & {
   projects: EvidenceProjectRef[];
   skills: EvidenceSkillRef[];
   achievements: EvidenceAchievementRef[];
+  educations: EvidenceEducationRef[];
 };
 
 /*

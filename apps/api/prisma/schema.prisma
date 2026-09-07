@@ -80,7 +80,8 @@ model Education {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user     User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  evidence EvidenceEducation[]
 
   @@index([userId])
   @@index([userId, startDate])
@@ -104,7 +105,14 @@ model ResumeImport {
   fileName             String
   storagePath          String
   status               ResumeImportStatus    @default(PENDING)
+  /// What the user reviewed and confirmed. Overwritten by their edits.
   extractionResult     Json?
+  /// The worker's original output, written once on delivery and never
+  /// updated. Without it there is no way to answer what the AI actually
+  /// extracted, because extractionResult is replaced by the user's edits
+  /// on every confirm. Null for imports ingested before this column
+  /// existed - unknown, and not reconstructible.
+  rawExtractionResult  Json?
   errorMessage         String?
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
@@ -127,6 +135,11 @@ model Experience {
   location    String?
   startDate   DateTime?
   endDate     DateTime?
+  /// The end date exactly as the source wrote it, before parsing.
+  /// isCurrent alone cannot distinguish a source that SAID "Present" from
+  /// one that simply omitted an end date - the first is a fact, the second
+  /// an inference. This keeps that distinction recoverable.
+  endDateText String?
   isCurrent   Boolean        @default(false)
 
   createdAt DateTime @default(now())
@@ -234,6 +247,7 @@ model Evidence {
   projects     EvidenceProject[]
   skills       EvidenceSkill[]
   achievements EvidenceAchievement[]
+  educations   EvidenceEducation[]
 
   @@index([userId])
   @@index([userId, sourceType])
@@ -355,6 +369,17 @@ model EvidenceSkill {
 
   @@id([evidenceId, skillId])
   @@index([skillId])
+}
+
+model EvidenceEducation {
+  evidenceId  String @db.Uuid
+  educationId String @db.Uuid
+
+  evidence  Evidence  @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+  education Education @relation(fields: [educationId], references: [id], onDelete: Cascade)
+
+  @@id([evidenceId, educationId])
+  @@index([educationId])
 }
 
 model EvidenceAchievement {

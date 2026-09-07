@@ -10,8 +10,8 @@
  *     undated records are separated out instead of being placed on the axis.
  *   - Ordering is a total order (it ends on the entity id), so records that
  *     share a date always come back in the same sequence.
- *   - Provenance comes from evidence rows linked to the record. Where the
- *     schema exposes no link, provenance is reported as unknown.
+ *   - Provenance comes from evidence rows linked to the record. Where no
+ *     evidence is linked, provenance is reported as unknown.
  */
 
 import type { CareerGraph } from '../api/career-graph';

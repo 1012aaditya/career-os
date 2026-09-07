@@ -69,15 +69,24 @@ export type CareerStateBasis =
   /** The record carries an end date. A concrete fact. */
   | 'has-end-date'
   /*
-   * isCurrent is set and there is no end date.
+   * The record states it: the end date it carries is an ongoing marker
+   * ("Present", "Current").
    *
-   * IMPORTANT: for anything ingested from a resume this flag was derived
-   * at ingestion from the ABSENCE of an end date, not from the resume
-   * asserting the role is ongoing. The two are indistinguishable once
-   * persisted — no per-record provenance survives ingestion — so a caller
-   * must not present this as something the user stated.
+   * Stronger than an inference, but NOT proof the AI extracted it —
+   * ingestion reads the CONFIRMED extraction, which the user may have
+   * edited during review. Read this as "the confirmed record says
+   * ongoing", never as "the resume said ongoing". Separating those two
+   * needs the preserved raw extraction, which is now recorded but not yet
+   * consulted here.
    */
-  | 'flagged-current'
+  | 'stated-current'
+  /*
+   * isCurrent is set and the source supplied no end date at all. Treating
+   * the role as open is the resume convention, but it is an INFERENCE —
+   * the source never said the role is ongoing. Callers must not present
+   * this as something the user stated.
+   */
+  | 'assumed-current'
   /** isCurrent is set but an end date is also present; they disagree. */
   | 'conflicting'
   /** Neither signal is present. Nothing is known either way. */
@@ -92,7 +101,32 @@ export type CareerStateResult = {
  * An explicit end date always wins over the isCurrent flag. The date is a
  * value the record actually carries; the flag may have been derived from
  * that value's absence at ingestion, so it is the weaker signal.
+ *
+ * When the record kept the source's own end-date text, the basis separates
+ * a role the source SAID was ongoing from one where the absence of a date
+ * was merely read that way. Records written before endDateText existed
+ * cannot make that distinction and report the weaker of the two.
  */
+/*
+ * MIRRORS the list in apps/api/src/career-graph/career-graph-ingestion.service.ts
+ * (ONGOING_MARKERS). Ingestion uses it to decide isCurrent; this uses it to
+ * decide whether that decision was stated by the source or assumed from a
+ * missing date. No shared package spans the two apps, so they must be kept
+ * in step by hand — a value present in one and not the other silently
+ * downgrades a stated fact to an inference.
+ */
+const ONGOING_MARKERS = new Set([
+  'present',
+  'current',
+  'currently',
+  'now',
+  'ongoing',
+  'to date',
+  'till date',
+  'to present',
+  'till present',
+]);
+
 export function getCareerState(
   record: unknown,
 ): CareerStateResult {
@@ -103,6 +137,17 @@ export function getCareerState(
     record,
     'isCurrent',
   );
+
+  const endDateText = getStringField(
+    record,
+    'endDateText',
+  );
+
+  const statedOngoing =
+    endDateText !== null &&
+    ONGOING_MARKERS.has(
+      endDateText.toLowerCase(),
+    );
 
   if (hasEndDate && isCurrent) {
     return {
@@ -121,7 +166,9 @@ export function getCareerState(
   if (isCurrent) {
     return {
       state: 'current',
-      basis: 'flagged-current',
+      basis: statedOngoing
+        ? 'stated-current'
+        : 'assumed-current',
     };
   }
 
@@ -460,6 +507,7 @@ export function buildDataQualityReport(
           'experiences',
           'projects',
           'achievements',
+          'educations',
         ] as const
       ).every(
         (key) =>

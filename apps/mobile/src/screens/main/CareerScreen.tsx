@@ -759,7 +759,7 @@ function getEmptyRelationsText(
       return 'No roles or projects list this skill yet.';
 
     case 'education':
-      return 'Education records aren’t linked to other records yet.';
+      return 'No roles, projects or skills link to this education record.';
 
     case 'experience':
     case 'project':

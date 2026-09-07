@@ -425,6 +425,16 @@ export class CareerGraphIngestionService {
                   startDate,
                   endDate,
                   /*
+                   * Kept verbatim so the basis for isCurrent stays
+                   * recoverable: a source that SAID "Present" is a fact,
+                   * a source that omitted an end date is an inference,
+                   * and the boolean alone cannot tell them apart.
+                   */
+                  endDateText:
+                    rawEndDate === ''
+                      ? null
+                      : rawEndDate,
+                  /*
                    * Current only when the source SAYS so, or says nothing.
                    *
                    * Three distinct cases hide behind one boolean, and
@@ -691,6 +701,29 @@ export class CareerGraphIngestionService {
 
         /*
          * ------------------------------------------------------
+         * EVIDENCE → EDUCATION
+         * ------------------------------------------------------
+         *
+         * educationRecords was previously collected and never used, which
+         * left education as the only entity in the graph unable to say
+         * which import it came from. The provenance recorded here is the
+         * same fact its siblings record: this confirmed resume attests to
+         * this row.
+         */
+
+        for (const educationId of this.distinctIds(
+          educationRecords,
+        )) {
+          await tx.evidenceEducation.create({
+            data: {
+              evidenceId: evidence.id,
+              educationId,
+            },
+          });
+        }
+
+        /*
+         * ------------------------------------------------------
          * EVIDENCE → EXPERIENCES
          * ------------------------------------------------------
          */
@@ -820,6 +853,12 @@ export class CareerGraphIngestionService {
    * End-date values that mean "still here". Deliberately a closed list:
    * anything outside it is treated as unreadable rather than guessed at,
    * because a wrong guess here invents current employment.
+   *
+   * MIRRORED in apps/mobile/src/career/data-quality.ts, which re-reads the
+   * persisted endDateText to decide whether CURRENT was stated or merely
+   * assumed. The two apps share no package, so the list is duplicated by
+   * necessity — change both together or the mobile basis will disagree
+   * with what ingestion recorded.
    */
   private static readonly ONGOING_MARKERS =
     new Set([
@@ -858,20 +897,202 @@ export class CareerGraphIngestionService {
     return trimmed || null;
   }
 
+  /*
+   * Accepts only date shapes a resume actually uses, and parses them as UTC.
+   *
+   * new Date() was doing two harmful things here. It invents a date from any
+   * text that merely contains a year — "Summer 2023" became 1 January 2023,
+   * and in a positive-offset timezone that is stored as 2022-12-31, so the
+   * graph showed a year the resume never mentioned. And it parses ISO
+   * date-only strings as UTC but everything else as LOCAL time, so
+   * "2023-05-01" and "May 2023" produced instants hours apart; because the
+   * dedupe key compares those instants, re-importing the same role written a
+   * different way created a duplicate row.
+   *
+   * Anything outside these shapes returns null. A date we cannot read is
+   * unknown, and unknown must not be turned into a value.
+   */
+  private static readonly MONTH_NAMES: Record<
+    string,
+    number
+  > = {
+    jan: 1,
+    january: 1,
+    feb: 2,
+    february: 2,
+    mar: 3,
+    march: 3,
+    apr: 4,
+    april: 4,
+    may: 5,
+    jun: 6,
+    june: 6,
+    jul: 7,
+    july: 7,
+    aug: 8,
+    august: 8,
+    sep: 9,
+    sept: 9,
+    september: 9,
+    oct: 10,
+    october: 10,
+    nov: 11,
+    november: 11,
+    dec: 12,
+    december: 12,
+  };
+
   private parseDate(
     value?: string,
   ) {
-    if (!value) {
+    const text = value?.trim();
+
+    if (!text) {
       return null;
     }
 
-    const date =
-      new Date(value);
+    /*
+     * Full ISO timestamps: take the date part. The worker's format is not
+     * pinned by any contract in this repo, so if it ever emits ISO
+     * datetimes rather than plain dates, refusing them here would null out
+     * every date in every import silently.
+     */
+    const isoDateTime = text.match(
+      /^(\d{4}-\d{2}-\d{2})[T ]/,
+    );
+
+    const normalised = isoDateTime
+      ? isoDateTime[1]
+      : text;
+
+    /* 2024-08-15 / 2024-08 / 2024/08 */
+    const numeric = normalised.match(
+      /^(\d{4})(?:[-/](\d{1,2}))?(?:[-/](\d{1,2}))?$/,
+    );
+
+    if (numeric) {
+      return this.utcDate(
+        Number(numeric[1]),
+        numeric[2] ? Number(numeric[2]) : 1,
+        numeric[3] ? Number(numeric[3]) : 1,
+      );
+    }
+
+    /*
+     * Month and a 4-digit year, in either order, with no day component.
+     * The year is unambiguous at four digits and there is no day to
+     * misread, so "08/2024" is safe where "05/06/2024" is not.
+     */
+    const monthNumberYear = normalised.match(
+      /^(\d{1,2})[-/](\d{4})$/,
+    );
+
+    if (monthNumberYear) {
+      return this.utcDate(
+        Number(monthNumberYear[2]),
+        Number(monthNumberYear[1]),
+        1,
+      );
+    }
+
+    /* August 2024 / Aug 2024 / Aug. 2024 / Aug-2024 */
+    const monthYear = normalised.match(
+      /^([A-Za-z]{3,9})\.?[\s-]+(\d{4})$/,
+    );
+
+    if (monthYear) {
+      const month = this.monthNumber(
+        monthYear[1],
+      );
+
+      if (month) {
+        return this.utcDate(
+          Number(monthYear[2]),
+          month,
+          1,
+        );
+      }
+    }
+
+    /* August 15, 2024 / Aug 15 2024 */
+    const monthDayYear = normalised.match(
+      /^([A-Za-z]{3,9})\.?[\s-]+(\d{1,2}),?[\s-]+(\d{4})$/,
+    );
+
+    if (monthDayYear) {
+      const month = this.monthNumber(
+        monthDayYear[1],
+      );
+
+      if (month) {
+        return this.utcDate(
+          Number(monthDayYear[3]),
+          month,
+          Number(monthDayYear[2]),
+        );
+      }
+    }
+
+    /* 15 August 2024 / 15 Aug 2024 */
+    const dayMonthYear = normalised.match(
+      /^(\d{1,2})[\s-]+([A-Za-z]{3,9})\.?,?[\s-]+(\d{4})$/,
+    );
+
+    if (dayMonthYear) {
+      const month = this.monthNumber(
+        dayMonthYear[2],
+      );
+
+      if (month) {
+        return this.utcDate(
+          Number(dayMonthYear[3]),
+          month,
+          Number(dayMonthYear[1]),
+        );
+      }
+    }
+
+    /*
+     * Purely numeric day/month forms such as "05/06/2024" are deliberately
+     * NOT accepted. They are ambiguous between US month-first and
+     * international day-first ordering, and picking one would silently
+     * record the wrong date about half the time. An unreadable date is
+     * recoverable; a confidently wrong one is not.
+     */
+    return null;
+  }
+
+  private monthNumber(name: string) {
+    return CareerGraphIngestionService
+      .MONTH_NAMES[name.toLowerCase()];
+  }
+
+  /*
+   * Always UTC, and rejects impossible components rather than letting
+   * Date roll them over (month 13 must not silently become January).
+   */
+  private utcDate(
+    year: number,
+    month: number,
+    day: number,
+  ) {
+    if (
+      month < 1 ||
+      month > 12 ||
+      day < 1 ||
+      day > 31
+    ) {
+      return null;
+    }
+
+    const date = new Date(
+      Date.UTC(year, month - 1, day),
+    );
 
     if (
-      Number.isNaN(
-        date.getTime(),
-      )
+      date.getUTCFullYear() !== year ||
+      date.getUTCMonth() !== month - 1 ||
+      date.getUTCDate() !== day
     ) {
       return null;
     }

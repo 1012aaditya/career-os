@@ -62,9 +62,14 @@ export class ResumeProcessingController {
       throw new UnauthorizedException('id is required');
     }
 
+    /*
+     * Passed through as-is, including undefined. The service still defaults
+     * the reviewable column to {}, but must not record "the AI extracted an
+     * empty object" as provenance when the worker in fact sent nothing.
+     */
     return this.processingService.complete(
       body.id,
-      body.extractionResult ?? {},
+      body.extractionResult,
     );
   }
 

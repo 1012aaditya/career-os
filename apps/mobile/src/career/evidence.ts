@@ -83,6 +83,7 @@ export type EvidenceView = {
   linkedExperienceIds: string[];
   linkedProjectIds: string[];
   linkedAchievementIds: string[];
+  linkedEducationIds: string[];
   totalLinks: number;
 };
 
@@ -95,12 +96,14 @@ export type EvidenceIndex = {
   byExperienceId: Record<string, string[]>;
   byProjectId: Record<string, string[]>;
   byAchievementId: Record<string, string[]>;
+  byEducationId: Record<string, string[]>;
   counts: {
     records: number;
     linkedSkills: number;
     linkedExperiences: number;
     linkedProjects: number;
     linkedAchievements: number;
+    linkedEducations: number;
   };
 };
 
@@ -136,14 +139,6 @@ const SOURCE_LABELS: Record<string, string> =
     DOCUMENT: 'Document',
     OTHER: 'Other source',
   };
-
-/*
- * Education has no evidence relation in the schema — there is no
- * EvidenceEducation table — so it can never be supported today. That is a
- * structural gap, not a missing document, and it is reported as such.
- */
-const EDUCATION_NOTE =
-  'Education records cannot carry evidence yet.';
 
 const CONFIRMED_RESUME_STATEMENT =
   'Confirmed from a resume you reviewed';
@@ -182,6 +177,11 @@ export function buildEvidenceIndex(
     string[]
   > = {};
 
+  const byEducationId: Record<
+    string,
+    string[]
+  > = {};
+
   records.forEach((record) => {
     byId[record.id] = record;
 
@@ -200,6 +200,10 @@ export function buildEvidenceIndex(
     record.linkedAchievementIds.forEach((id) =>
       push(byAchievementId, id, record.id),
     );
+
+    record.linkedEducationIds.forEach((id) =>
+      push(byEducationId, id, record.id),
+    );
   });
 
   return {
@@ -209,6 +213,7 @@ export function buildEvidenceIndex(
     byExperienceId,
     byProjectId,
     byAchievementId,
+    byEducationId,
     counts: {
       records: records.length,
       linkedSkills:
@@ -220,6 +225,9 @@ export function buildEvidenceIndex(
         Object.keys(byProjectId).length,
       linkedAchievements: Object.keys(
         byAchievementId,
+      ).length,
+      linkedEducations: Object.keys(
+        byEducationId,
       ).length,
     },
   };
@@ -271,12 +279,15 @@ export function getEvidenceForAchievement(
   );
 }
 
-/*
- * Always empty. Kept so callers can treat education uniformly instead of
- * special-casing it into silence.
- */
-export function getEvidenceForEducation(): EvidenceView[] {
-  return [];
+export function getEvidenceForEducation(
+  index: EvidenceIndex,
+  educationId: string,
+): EvidenceView[] {
+  return resolve(
+    index,
+    index.byEducationId,
+    educationId,
+  );
 }
 
 export function getEvidenceForEntity(
@@ -310,7 +321,10 @@ export function getEvidenceForEntity(
       );
 
     case 'education':
-      return getEvidenceForEducation();
+      return getEvidenceForEducation(
+        index,
+        entityId,
+      );
   }
 }
 
@@ -389,10 +403,13 @@ export function getSupportSummary(
     label: getSupportLabel(state),
     evidenceCount: evidence.length,
     evidence,
-    note:
-      entityType === 'education'
-        ? EDUCATION_NOTE
-        : null,
+    /*
+     * No structural excuse remains: education carries provenance like
+     * every other entity. A row imported before EvidenceEducation existed
+     * simply has none recorded, which is unknown rather than unsupported —
+     * and unknown is what an empty result already says.
+     */
+    note: null,
   };
 }
 
@@ -406,7 +423,6 @@ export function getSupportLabel(
 
 /*
  * Every entity in the graph with no evidence behind it, in a stable order.
- * Education is always here, flagged with the structural reason.
  */
 export function getUnsupportedEntities(
   graph: CareerGraph | null,
@@ -501,7 +517,7 @@ export function getUnsupportedEntities(
     (item) =>
       getStringField(item, 'institution') ??
       'Education',
-    EDUCATION_NOTE,
+    null,
   );
 
   return out;
@@ -559,6 +575,14 @@ function readEvidence(
       'title',
       'achievement',
     ),
+    ...readLinks(
+      record,
+      'educations',
+      'educationId',
+      'education',
+      'institution',
+      'education',
+    ),
   ];
 
   const idsOf = (
@@ -600,6 +624,7 @@ function readEvidence(
     linkedExperienceIds: idsOf('experience'),
     linkedProjectIds: idsOf('project'),
     linkedAchievementIds: idsOf('achievement'),
+    linkedEducationIds: idsOf('education'),
     totalLinks: links.length,
   };
 }

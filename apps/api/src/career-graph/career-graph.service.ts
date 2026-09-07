@@ -33,6 +33,13 @@ export class CareerGraphService {
         include: {
           profile: true,
           educations: {
+            include: {
+              evidence: {
+                include: {
+                  evidence: true,
+                },
+              },
+            },
             orderBy: [
               {
                 startDate: {
@@ -197,6 +204,16 @@ export class CareerGraphService {
                     select: {
                       id: true,
                       title: true,
+                    },
+                  },
+                },
+              },
+              educations: {
+                include: {
+                  education: {
+                    select: {
+                      id: true,
+                      institution: true,
                     },
                   },
                 },

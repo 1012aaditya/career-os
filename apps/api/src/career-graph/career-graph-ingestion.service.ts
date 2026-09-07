@@ -5,6 +5,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 
+import { Prisma } from '@prisma/client';
+
 import { PrismaService } from '../prisma/prisma.service.js';
 
 type ResumeExtraction = {
@@ -823,7 +825,61 @@ export class CareerGraphIngestionService {
         timeout: 120000,
         maxWait: 100000,
       },
-    );
+    ).catch(async (error: unknown) => {
+      /*
+       * Two requests can ingest the same import at once. The idempotency
+       * read at the top of the transaction runs under READ COMMITTED, so
+       * neither sees the other's uncommitted ledger row and both proceed
+       * through the whole write path. The unique index on
+       * CareerGraphIngestion.resumeImportId is what actually serialises
+       * them: the loser fails on it, and Postgres rolls its writes back,
+       * which is correct and leaves no partial graph behind.
+       *
+       * What was wrong was the report. P2002 escaped as an unhandled 500,
+       * telling the caller the ingestion failed at the moment the winning
+       * request committed it. A caller that reverts the import on failure
+       * would then ask the user to retry an import whose records are
+       * already live in their graph.
+       *
+       * Arriving second here is the same outcome as arriving second by any
+       * other route, so it reports what those routes report.
+       *
+       * The ledger row is read back rather than assumed, and the read is
+       * what makes this safe: the row is created last inside the atomic
+       * transaction, so its presence means some request ingested THIS
+       * import in full. A P2002 from a different constraint — two users
+       * racing on Skill.normalizedName, say — normally finds no row and
+       * rethrows untouched. If it does find one, a concurrent request had
+       * genuinely committed this import, and reporting that is still the
+       * honest answer.
+       */
+      if (
+        error instanceof
+          Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        const committed =
+          await this.prisma.careerGraphIngestion.findUnique(
+            {
+              where: {
+                resumeImportId:
+                  resumeImport.id,
+              },
+            },
+          );
+
+        if (committed) {
+          return {
+            resumeImportId:
+              committed.resumeImportId,
+            ingestionId: committed.id,
+            status: 'ALREADY_INGESTED',
+          };
+        }
+      }
+
+      throw error;
+    });
   }
 
   /*

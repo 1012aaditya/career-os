@@ -1429,6 +1429,28 @@ function TimelineRow({
     selection: DetailSelection,
   ) => void;
 }) {
+  /*
+   * The range and the current-state marker are composed here rather than
+   * concatenated inline, so a record carrying one but not the other still
+   * renders. An undated role that is current has no range at all, and the
+   * marker used to be dropped with it.
+   */
+  const stateMarker = item.isCurrent
+    ? item.stateBasis === 'stated-current'
+      ? 'Current'
+      : 'Current (assumed)'
+    : null;
+
+  const periodLabel = [
+    item.rangeLabel,
+    stateMarker,
+  ]
+    .filter(
+      (part): part is string =>
+        part !== null,
+    )
+    .join(' · ');
+
   return (
     <Pressable
       style={styles.timelineRow}
@@ -1462,10 +1484,9 @@ function TimelineRow({
         </AppText>
       ) : null}
 
-      {item.rangeLabel ? (
+      {periodLabel ? (
         <AppText variant="caption" muted>
-          {item.rangeLabel}
-          {item.isCurrent ? ' · Current' : ''}
+          {periodLabel}
         </AppText>
       ) : null}
 
@@ -2171,9 +2192,15 @@ function getSnapshotCompanyName(
   return null;
 }
 
-// Year-only range. A record with a start date but no end date and no
-// isCurrent flag is rendered as "From <year>" rather than "— Present",
-// because the payload does not say the role is ongoing.
+// Year-only range, and the one place a card can say a role is open: entity
+// cards render `period` alone, with no marker beside it. So unlike the
+// timeline — where TimelineRow appends the marker — the qualification has
+// to live inside the string.
+//
+// "Present" is reserved for a record that STATED it is ongoing. A record
+// that is current only because no end date was supplied says so as
+// "Current (assumed)", because dropping the marker entirely would have
+// left the card silent about a role the timeline calls current.
 function formatPeriod(
   item: unknown,
 ): string | null {
@@ -2184,11 +2211,18 @@ function formatPeriod(
 
   const end = getYearField(item, 'endDate');
 
+  const careerState = getCareerState(item);
+
   const isCurrent =
-    getCareerState(item).state === 'current';
+    careerState.state === 'current';
+
+  const statedCurrent =
+    careerState.basis === 'stated-current';
 
   if (start !== null && isCurrent) {
-    return `${start} — Present`;
+    return statedCurrent
+      ? `${start} — Present`
+      : `From ${start} · Current (assumed)`;
   }
 
   if (start !== null && end !== null) {
@@ -2206,7 +2240,9 @@ function formatPeriod(
   }
 
   if (isCurrent) {
-    return 'Current';
+    return statedCurrent
+      ? 'Current'
+      : 'Current (assumed)';
   }
 
   return null;

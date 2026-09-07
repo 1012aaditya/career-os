@@ -23,7 +23,10 @@ import {
   toArray,
 } from './graph-fields';
 
-import { getCareerState } from './data-quality';
+import {
+  getCareerState,
+  type CareerStateBasis,
+} from './data-quality';
 
 export type TimelineItemType =
   | 'experience'
@@ -60,6 +63,16 @@ export type TimelineItem = {
   start: TimelineDate | null;
   end: TimelineDate | null;
   isCurrent: boolean;
+  /*
+   * WHY the item is current, not just that it is. `current` covers two
+   * different facts: a record whose end date is an ongoing marker (the
+   * source said so) and a record with no end date at all (ingestion read
+   * the absence that way). The second is an inference, and a renderer that
+   * cannot tell them apart has no choice but to state both as fact.
+   *
+   * Always 'no-signal' for the types that cannot be current.
+   */
+  stateBasis: CareerStateBasis;
   /** True when the record carries at least one real date. */
   isDated: boolean;
   /** A moment (achievement, evidence) rather than a span. */
@@ -263,8 +276,19 @@ function buildExperienceItem(
    * isCurrent flag. A row carrying both used to render "— Present" and
    * hide the end date it actually has.
    */
+  const careerState = getCareerState(record);
+
   const isCurrent =
-    getCareerState(record).state === 'current';
+    careerState.state === 'current';
+
+  /*
+   * Only an ongoing marker the record actually carries earns "Present".
+   * A missing end date reads as current too, but the source never said
+   * so, and printing "— Present" off an absent field asserts a job the
+   * user may not hold. Those fall through to "From <date>".
+   */
+  const statedCurrent =
+    careerState.basis === 'stated-current';
 
   return {
     id: `experience:${readEntityId(record, index)}`,
@@ -278,6 +302,7 @@ function buildExperienceItem(
     start,
     end,
     isCurrent,
+    stateBasis: careerState.basis,
     isDated:
       start !== null || end !== null,
     isPointEvent: false,
@@ -286,6 +311,7 @@ function buildExperienceItem(
       end,
       isCurrent,
       false,
+      statedCurrent,
     ),
     provenance: readLinkedProvenance(record),
   };
@@ -327,6 +353,7 @@ function buildEducationItem(
     start,
     end,
     isCurrent: false,
+    stateBasis: 'no-signal',
     isDated:
       start !== null || end !== null,
     isPointEvent: false,
@@ -337,11 +364,18 @@ function buildEducationItem(
       false,
     ),
     /*
-     * Education carries no evidence relation in the schema, so there is
-     * nothing to read. Reported as unknown rather than assumed to be
-     * resume-sourced.
+     * Read like every other entity's provenance. This used to be hardcoded
+     * to unknown on the grounds that "education carries no evidence
+     * relation in the schema" — true when it was written, and false since
+     * the EvidenceEducation join was added. The comment outlived the fact,
+     * so every education row reported "Source not recorded" while the
+     * detail sheet, reading the same payload through evidence.ts, showed
+     * the same record as supported. One screen contradicted the other.
+     *
+     * getGraph includes educations.evidence.evidence, which is the exact
+     * shape readLinkedProvenance already reads.
      */
-    provenance: unknownProvenance(),
+    provenance: readLinkedProvenance(record),
   };
 }
 
@@ -370,6 +404,7 @@ function buildProjectItem(
     start,
     end,
     isCurrent: false,
+    stateBasis: 'no-signal',
     isDated:
       start !== null || end !== null,
     isPointEvent: false,
@@ -410,6 +445,7 @@ function buildAchievementItem(
     start: occurredAt,
     end: null,
     isCurrent: false,
+    stateBasis: 'no-signal',
     isDated: occurredAt !== null,
     isPointEvent: true,
     rangeLabel: formatRange(
@@ -467,6 +503,7 @@ function buildEvidenceItem(
     start: occurredAt,
     end: null,
     isCurrent: false,
+    stateBasis: 'no-signal',
     isDated: true,
     isPointEvent: true,
     rangeLabel: formatRange(
@@ -603,21 +640,25 @@ function readDate(
 }
 
 /*
- * "Present" is only ever printed when the record actually says isCurrent.
- * A start with no end and no flag becomes "From <date>", because the
- * payload does not claim the span is still open.
+ * "Present" is only ever printed when the record STATED that it is
+ * ongoing — an end date the source wrote as "Present", "Current" and the
+ * like. A start with no end and no flag becomes "From <date>", because the
+ * payload does not claim the span is still open; and so does a record that
+ * is current only because its end date is missing, because that claim is
+ * ours rather than the source's.
  */
 function formatRange(
   start: TimelineDate | null,
   end: TimelineDate | null,
   isCurrent: boolean,
   isPointEvent: boolean,
+  statedCurrent = false,
 ): string | null {
   if (isPointEvent) {
     return start ? start.label : null;
   }
 
-  if (start && isCurrent) {
+  if (start && isCurrent && statedCurrent) {
     return `${start.label} — Present`;
   }
 
@@ -635,10 +676,13 @@ function formatRange(
     return `Until ${end.label}`;
   }
 
-  if (isCurrent) {
-    return 'Current';
-  }
-
+  /*
+   * No date in either direction. Currentness is deliberately NOT spelled
+   * here: the timeline row appends its own marker, and returning 'Current'
+   * as well produced "Current · Current" — and, once the marker learned to
+   * qualify an inference, "Current · Current (assumed)". The row renders
+   * the marker whether or not a range exists, so nothing is lost.
+   */
   return null;
 }
 

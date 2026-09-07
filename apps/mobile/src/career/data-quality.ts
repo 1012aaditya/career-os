@@ -659,8 +659,10 @@ function findLookalikes(
 
 /*
  * A skill counts only when the payload carries a real Skill.id. Falling
- * back to array position would make the report depend on row order, and
- * getGraph applies no ORDER BY to userSkills.
+ * back to array position would make the report depend on row order. That
+ * order is now fixed by getGraph, but position would still be the wrong
+ * key: it identifies a slot rather than a skill, so any change to the
+ * query would silently re-point the finding at a different record.
  */
 function readSkillId(
   item: unknown,

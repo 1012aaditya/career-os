@@ -25,6 +25,21 @@ export class CareerGraphService {
    *     differently between calls.
    *   - userSkills is ordered by when the skill was attached; it carries
    *     no date of its own and any other key would imply a ranking.
+   *
+   * NESTED collections are ordered too, by the foreign key that varies
+   * within the parent. Only the top-level lists used to carry an orderBy,
+   * so the contract above was true of them and false of everything one
+   * level down: Postgres was free to return an experience's skills, or an
+   * evidence row's links, in any order it liked. That order reaches the
+   * user — EvidenceCard renders the first six links and a "+N more" line —
+   * so the same graph could show a different six between refreshes.
+   *
+   * The join tables have no createdAt and no rank column (see
+   * schema.prisma), so there is no meaningful order to restore; the FK is
+   * chosen because it is the only column that is both present and unique
+   * within a parent. It sorts by an opaque uuid, which is arbitrary but
+   * STABLE — and stable is the whole requirement. Clients that need a
+   * meaningful order sort by display name themselves.
    */
   async getGraph(userId: string) {
     const user =
@@ -38,6 +53,9 @@ export class CareerGraphService {
                 include: {
                   evidence: true,
                 },
+                orderBy: [
+                  { evidenceId: 'asc' },
+                ],
               },
             },
             orderBy: [
@@ -58,21 +76,33 @@ export class CareerGraphService {
                 include: {
                   skill: true,
                 },
+                orderBy: [
+                  { skillId: 'asc' },
+                ],
               },
               projects: {
                 include: {
                   project: true,
                 },
+                orderBy: [
+                  { projectId: 'asc' },
+                ],
               },
               achievements: {
                 include: {
                   achievement: true,
                 },
+                orderBy: [
+                  { achievementId: 'asc' },
+                ],
               },
               evidence: {
                 include: {
                   evidence: true,
                 },
+                orderBy: [
+                  { evidenceId: 'asc' },
+                ],
               },
             },
             orderBy: [
@@ -92,16 +122,25 @@ export class CareerGraphService {
                 include: {
                   skill: true,
                 },
+                orderBy: [
+                  { skillId: 'asc' },
+                ],
               },
               achievements: {
                 include: {
                   achievement: true,
                 },
+                orderBy: [
+                  { achievementId: 'asc' },
+                ],
               },
               evidence: {
                 include: {
                   evidence: true,
                 },
+                orderBy: [
+                  { evidenceId: 'asc' },
+                ],
               },
             },
             orderBy: [
@@ -135,6 +174,9 @@ export class CareerGraphService {
                 include: {
                   evidence: true,
                 },
+                orderBy: [
+                  { evidenceId: 'asc' },
+                ],
               },
             },
             orderBy: [
@@ -177,6 +219,9 @@ export class CareerGraphService {
                     },
                   },
                 },
+                orderBy: [
+                  { experienceId: 'asc' },
+                ],
               },
               projects: {
                 include: {
@@ -187,6 +232,9 @@ export class CareerGraphService {
                     },
                   },
                 },
+                orderBy: [
+                  { projectId: 'asc' },
+                ],
               },
               skills: {
                 include: {
@@ -197,6 +245,9 @@ export class CareerGraphService {
                     },
                   },
                 },
+                orderBy: [
+                  { skillId: 'asc' },
+                ],
               },
               achievements: {
                 include: {
@@ -207,6 +258,9 @@ export class CareerGraphService {
                     },
                   },
                 },
+                orderBy: [
+                  { achievementId: 'asc' },
+                ],
               },
               educations: {
                 include: {
@@ -217,6 +271,9 @@ export class CareerGraphService {
                     },
                   },
                 },
+                orderBy: [
+                  { educationId: 'asc' },
+                ],
               },
             },
             orderBy: [
@@ -224,7 +281,22 @@ export class CareerGraphService {
               { id: 'asc' },
             ],
           },
-          goals: true,
+          /*
+           * Ordered like the other dated top-level collections. It was the
+           * one that never carried an orderBy at all.
+           */
+          goals: {
+            orderBy: [
+              {
+                targetDate: {
+                  sort: 'desc',
+                  nulls: 'last',
+                },
+              },
+              { createdAt: 'desc' },
+              { id: 'asc' },
+            ],
+          },
         },
       });
 

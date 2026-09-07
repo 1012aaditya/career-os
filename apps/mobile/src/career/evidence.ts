@@ -678,7 +678,47 @@ function readLinks(
     });
   });
 
-  return links;
+  /*
+   * Sorted, because this list reaches the user as a capped slice: the
+   * evidence card renders the first six links and a "+N more" line. The
+   * join rows it is built from are a nested relation, and nested relations
+   * are ordered by the API only as of the ordering contract in
+   * career-graph.service.ts — older payloads, and any other caller, may
+   * hand them over in whatever order Postgres chose. Without a sort here
+   * the same evidence row could show a different six between refreshes,
+   * with no way for the user to tell the list had changed.
+   *
+   * By display name so the slice is the same six a person would predict,
+   * then by id so records sharing a name (or carrying none) still resolve
+   * to one fixed order. Unnamed records sort last only to keep the
+   * comparator total — the card filters them before it slices, so where
+   * they land cannot cost a named record a slot either way.
+   *
+   * Compared with < and > rather than localeCompare, matching sortEntities
+   * in data-quality.ts and buildGroups in relations.ts. The point here is a
+   * fixed order, and localeCompare's is locale-dependent — the same graph
+   * would sort differently on two devices, which is the property this sort
+   * exists to remove.
+   */
+  return links.sort((a, b) => {
+    if (a.name !== b.name) {
+      if (a.name === null) {
+        return 1;
+      }
+
+      if (b.name === null) {
+        return -1;
+      }
+
+      return a.name < b.name ? -1 : 1;
+    }
+
+    return a.entityId < b.entityId
+      ? -1
+      : a.entityId > b.entityId
+        ? 1
+        : 0;
+  });
 }
 
 function readSource(

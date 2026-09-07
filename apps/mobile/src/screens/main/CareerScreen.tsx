@@ -50,161 +50,55 @@ import {
 } from '../../career/timeline';
 
 import {
+  buildGraphModel,
+  describeTruncation,
+  getEdgeEmphasis,
+  getEvidenceTitle,
+  getExperienceTitle,
+  getNodeEmphasis,
+  getNodeTypeLabelForLink,
+  getProjectName,
+  getSkillName,
+  isEdgeRendered,
+  selectionFromNode,
+  CENTER_X,
+  CENTER_Y,
+  GRAPH_HEIGHT,
+  GRAPH_LENSES,
+  GRAPH_WIDTH,
+  NODE_GLOW_PADDING,
+  NODE_LABEL_MAX_CHARS,
+  NODE_RADIUS,
+  PERSON_LABEL_MAX_CHARS,
+  type DetailEntityType,
+  type DetailSelection,
+  type GraphLens,
+  type GraphNodeType,
+} from '../../career/graph-model';
+
+import {
+  getEntityRelations,
+  type RelationGroup,
+} from '../../career/relations';
+
+import {
+  buildCareerStory,
+  type CareerStory,
+} from '../../career/story';
+
+import {
   buildEvidenceIndex,
   formatEvidenceDate,
-  getEvidenceForAchievement,
   getEvidenceForEntities,
-  getEvidenceForExperience,
-  getEvidenceForProject,
-  getEvidenceForSkill,
   getSupportSummary,
   type EvidenceEntityType,
   type EvidenceIndex,
   type EvidenceView,
 } from '../../career/evidence';
 
-type GraphNodeType =
-  | 'person'
-  | 'skill'
-  | 'experience'
-  | 'project'
-  | 'evidence'
-  | 'achievement';
-
-type GraphNode = {
-  /** Node key within the graph, e.g. "skill-<uuid>". */
-  id: string;
-  /*
-   * Stable database id of the entity this node represents: Skill.id,
-   * Experience.id, Project.id, Achievement.id or Evidence.id. Relationship
-   * lookups use this — never the label, which is a display value.
-   */
-  entityId: string;
-  label: string;
-  type: GraphNodeType;
-  x: number;
-  y: number;
-  subtitle?: string;
-};
-
-type GraphEdge = {
-  id: string;
-  from: string;
-  to: string;
-};
-
-/*
- * Education has no node on the Career Map (and no evidence relation in the
- * schema), but it is still inspectable from the timeline, so the detail
- * sheet works over a slightly wider set of types than the graph does.
- */
-type DetailEntityType =
-  | GraphNodeType
-  | 'education';
-
-/*
- * What the detail sheet is currently showing. Identity is always a list of
- * stable database ids: normally one, but a capability row that merged two
- * same-named Skill records carries both so its evidence is the union.
- */
-type DetailSelection = {
-  type: DetailEntityType;
-  entityIds: string[];
-  label: string;
-  subtitle?: string;
-};
-
-function selectionFromNode(
-  node: GraphNode,
-): DetailSelection {
-  return {
-    type: node.type,
-    entityIds: [node.entityId],
-    label: node.label,
-    subtitle: node.subtitle,
-  };
-}
-
-const GRAPH_WIDTH = 390;
-const GRAPH_HEIGHT = 520;
-const CENTER_X = GRAPH_WIDTH / 2;
-const CENTER_Y = GRAPH_HEIGHT / 2;
-
-// Breathing room kept between any painted pixel and the canvas edge.
-const GRAPH_PADDING = 12;
-
-// Labels are drawn centred on the node, so they can be wider than the
-// circle itself. These keep that overflow inside the canvas.
-const NODE_LABEL_MAX_CHARS = 14;
-const PERSON_LABEL_MAX_CHARS = 12;
+// Font size of the label drawn inside each node. The character budget it
+// has to fit in lives with the layout maths in graph-model.
 const NODE_LABEL_FONT_SIZE = 10;
-const LABEL_CHAR_WIDTH = 5.9;
-const NODE_GLOW_PADDING = 7;
-
-// Radial layout is elliptical: the canvas is much taller than it is wide,
-// so horizontal reach has to stay shorter than vertical reach.
-const SKILL_RX = 100;
-const SKILL_RY = 132;
-const SPOKE_RX = 138;
-const SPOKE_RY = 152;
-const OUTER_RX = 150;
-const OUTER_RY = 198;
-
-function getLabelHalfWidth(maxChars: number) {
-  return (maxChars * LABEL_CHAR_WIDTH) / 2;
-}
-
-// Half-extents of everything a node paints: circle + glow ring, and the
-// centred label which can be wider than the circle.
-function getNodeExtent(type: GraphNodeType) {
-  const { radius: nodeRadius } = getNodeStyle(type);
-  const outerRadius = nodeRadius + NODE_GLOW_PADDING;
-
-  const labelHalfWidth = getLabelHalfWidth(
-    type === 'person'
-      ? PERSON_LABEL_MAX_CHARS
-      : NODE_LABEL_MAX_CHARS,
-  );
-
-  return {
-    x: Math.max(outerRadius, labelHalfWidth),
-    // Non-person nodes also render a type caption below the label.
-    y: outerRadius + (type === 'person' ? 0 : 4),
-  };
-}
-
-// Places a node on an ellipse around the centre, then guarantees it stays
-// inside the canvas no matter how few nodes share a sector.
-function placeNode(
-  type: GraphNodeType,
-  angle: number,
-  rx: number,
-  ry: number,
-) {
-  const extent = getNodeExtent(type);
-
-  const minX = GRAPH_PADDING + extent.x;
-  const maxX = GRAPH_WIDTH - GRAPH_PADDING - extent.x;
-  const minY = GRAPH_PADDING + extent.y;
-  const maxY = GRAPH_HEIGHT - GRAPH_PADDING - extent.y;
-
-  return {
-    x: clamp(CENTER_X + Math.cos(angle) * rx, minX, maxX),
-    y: clamp(CENTER_Y + Math.sin(angle) * ry, minY, maxY),
-  };
-}
-
-function clamp(
-  value: number,
-  min: number,
-  max: number,
-) {
-  if (min > max) {
-    return (min + max) / 2;
-  }
-
-  return Math.min(Math.max(value, min), max);
-}
 
 export function CareerScreen() {
   const [graph, setGraph] = useState<CareerGraph | null>(null);
@@ -215,6 +109,8 @@ export function CareerScreen() {
     useState<DetailSelection | null>(null);
   const [canvasWidth, setCanvasWidth] =
     useState(GRAPH_WIDTH);
+  const [lens, setLens] =
+    useState<GraphLens>('all');
 
   const loadCareerGraph = useCallback(async () => {
     try {
@@ -241,16 +137,10 @@ export function CareerScreen() {
     }, [loadCareerGraph]),
   );
 
-  const graphModel = useMemo(() => {
-    if (!graph) {
-      return {
-        nodes: [] as GraphNode[],
-        edges: [] as GraphEdge[],
-      };
-    }
-
-    return buildGraphModel(graph);
-  }, [graph]);
+  const graphModel = useMemo(
+    () => buildGraphModel(graph),
+    [graph],
+  );
 
   const snapshot = useMemo(() => {
     if (!graph) {
@@ -268,6 +158,22 @@ export function CareerScreen() {
   const evidenceIndex = useMemo(
     () => buildEvidenceIndex(graph),
     [graph],
+  );
+
+  /*
+   * The map draws only a slice of a large career. The note states what was
+   * left out; it is independent of the lens, because a lens changes focus
+   * and never changes what exists.
+   */
+  const story = useMemo(
+    () => buildCareerStory(graph),
+    [graph],
+  );
+
+  const truncationNote = useMemo(
+    () =>
+      describeTruncation(graphModel.counts),
+    [graphModel],
   );
 
   if (loading) {
@@ -399,7 +305,7 @@ export function CareerScreen() {
                 variant="bodyMedium"
                 style={styles.graphCountNumber}
               >
-                {graphModel.nodes.length - 1}
+                {graphModel.counts.totalRecords}
               </AppText>
 
               <AppText
@@ -410,6 +316,53 @@ export function CareerScreen() {
               </AppText>
             </View>
           </View>
+
+          <View style={styles.lensRow}>
+            {GRAPH_LENSES.map((option) => {
+              const isActive =
+                option.id === lens;
+
+              return (
+                <Pressable
+                  key={option.id}
+                  style={[
+                    styles.lensChip,
+                    isActive
+                      ? styles.lensChipActive
+                      : styles.lensChipIdle,
+                  ]}
+                  onPress={() =>
+                    setLens(option.id)
+                  }
+                  accessibilityRole="button"
+                  accessibilityState={{
+                    selected: isActive,
+                  }}
+                >
+                  <AppText
+                    variant="caption"
+                    style={
+                      isActive
+                        ? styles.lensChipTextActive
+                        : styles.lensChipText
+                    }
+                  >
+                    {option.label}
+                  </AppText>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          {truncationNote ? (
+            <AppText
+              variant="caption"
+              muted
+              style={styles.truncationNote}
+            >
+              {truncationNote}
+            </AppText>
+          ) : null}
 
           <View
             style={styles.graphCanvas}
@@ -478,29 +431,7 @@ export function CareerScreen() {
               />
 
               {graphModel.edges
-                .filter((edge) => {
-                  const isPersonSpoke =
-                    edge.from === 'person' ||
-                    edge.to === 'person';
-
-                  if (!isPersonSpoke) {
-                    return true;
-                  }
-
-                  const other =
-                    edge.from === 'person'
-                      ? edge.to
-                      : edge.from;
-
-                  return (
-                    !other.startsWith(
-                      'evidence-',
-                    ) &&
-                    !other.startsWith(
-                      'achievement-',
-                    )
-                  );
-                })
+                .filter(isEdgeRendered)
                 .map((edge) => {
                   const from =
                     graphModel.nodes.find(
@@ -518,6 +449,9 @@ export function CareerScreen() {
                     return null;
                   }
 
+                  const emphasis =
+                    getEdgeEmphasis(edge, lens);
+
                   return (
                     <Line
                       key={edge.id}
@@ -527,7 +461,11 @@ export function CareerScreen() {
                       y2={to.y}
                       stroke={colors.border}
                       strokeWidth={1.2}
-                      strokeOpacity={0.55}
+                      strokeOpacity={
+                        emphasis === 'full'
+                          ? 0.55
+                          : 0.12
+                      }
                     />
                   );
                 })}
@@ -539,9 +477,24 @@ export function CareerScreen() {
                 const isPerson =
                   node.type === 'person';
 
+                /*
+                 * Out-of-lens nodes are dimmed, never removed: the layout
+                 * stays put and every node stays tappable, so a lens can
+                 * never imply a record is gone.
+                 */
+                const emphasis = getNodeEmphasis(
+                  node,
+                  lens,
+                );
+
                 return (
                   <G
                     key={node.id}
+                    opacity={
+                      emphasis === 'full'
+                        ? 1
+                        : 0.22
+                    }
                     onPress={() => {
                       if (!isPerson) {
                         setSelectedEntity(
@@ -555,7 +508,10 @@ export function CareerScreen() {
                     <Circle
                       cx={node.x}
                       cy={node.y}
-                      r={nodeStyle.radius + 7}
+                      r={
+                        nodeStyle.radius +
+                        NODE_GLOW_PADDING
+                      }
                       fill={nodeStyle.glow}
                       opacity={0.18}
                     />
@@ -724,20 +680,19 @@ export function CareerScreen() {
 
           <Card>
             <AppText variant="bodyMedium">
-              {experiences.length > 0
-                ? 'Your experience is becoming a connected career story.'
-                : 'Your career story is waiting to be built.'}
+              {story.headline}
             </AppText>
 
-            <AppText
-              variant="body"
-              muted
-              style={styles.cardText}
-            >
-              {projects.length > 0
-                ? `${projects.length} project${projects.length === 1 ? '' : 's'} and ${achievements.length} achievement${achievements.length === 1 ? '' : 's'} are already part of your graph.`
-                : 'Confirm more career information to make the graph richer.'}
-            </AppText>
+            {story.lines.map((line) => (
+              <AppText
+                key={line.id}
+                variant="body"
+                muted
+                style={styles.cardText}
+              >
+                {line.text}
+              </AppText>
+            ))}
           </Card>
         </View>
       </ScrollView>
@@ -760,6 +715,87 @@ export function CareerScreen() {
  * Vocabulary is limited to Supported / Unsupported — nothing in the
  * current schema can honestly justify a stronger claim.
  */
+/*
+ * One semantic relationship group. The heading states what the
+ * relationship is — USED IN, USES SKILLS, PART OF — rather than listing
+ * neighbours under a generic label. Groups with no members are dropped
+ * upstream, so this never renders an empty section.
+ */
+/*
+ * What to say when a record has no structural relationships.
+ *
+ * The wording is scoped to the type so it never contradicts Evidence Mode
+ * directly below it: an achievement with no role or project link is still
+ * backed by the resume it came from, and saying "no linked records" there
+ * would read as though nothing supports it. Evidence and the person node
+ * say nothing at all — their content is entirely Evidence Mode's.
+ */
+function getEmptyRelationsText(
+  type: DetailEntityType,
+): string | null {
+  switch (type) {
+    case 'achievement':
+      return 'No roles or projects list this achievement yet.';
+
+    case 'skill':
+      return 'No roles or projects list this skill yet.';
+
+    case 'education':
+      return 'Education records aren’t linked to other records yet.';
+
+    case 'experience':
+    case 'project':
+      return 'No linked records yet.';
+
+    case 'evidence':
+    case 'person':
+      return null;
+  }
+}
+
+function RelationGroupBlock({
+  group,
+}: {
+  group: RelationGroup;
+}) {
+  return (
+    <View style={styles.relationGroup}>
+      <AppText variant="caption" muted>
+        {group.title}
+      </AppText>
+
+      <View style={styles.connectionList}>
+        {group.items
+          .slice(0, 8)
+          .map((item) => (
+            <View
+              key={`${item.entityType}-${item.entityId}`}
+              style={styles.connectionRow}
+            >
+              <View
+                style={styles.connectionDot}
+              />
+
+              <AppText variant="body">
+                {item.label}
+              </AppText>
+            </View>
+          ))}
+
+        {group.items.length > 8 ? (
+          <AppText
+            variant="caption"
+            muted
+            style={styles.truncationNote}
+          >
+            {`Showing 8 of ${group.items.length}`}
+          </AppText>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 function EvidenceSection({
   selection,
   evidenceIndex,
@@ -1037,10 +1073,9 @@ function NodeDetailsModal({
 
   const style = getNodeStyle(selection.type);
 
-  const connections = getNodeConnections(
+  const relationGroups = getEntityRelations(
     selection,
     graph,
-    evidenceIndex,
   );
 
   return (
@@ -1108,38 +1143,37 @@ function NodeDetailsModal({
 
           <View style={styles.sheetDivider} />
 
-          <AppText
-            variant="caption"
-            muted
-          >
-            CONNECTED TO
-          </AppText>
-
-          {connections.length === 0 ? (
+          {selection.subtitle ? (
             <AppText
-              variant="body"
+              variant="caption"
               muted
-              style={styles.noConnections}
+              style={styles.sheetContext}
             >
-              No connected records yet.
+              {selection.subtitle}
             </AppText>
-          ) : (
-            <View style={styles.connectionList}>
-              {connections
-                .slice(0, 8)
-                .map((connection, index) => (
-                  <View
-                    key={`${connection}-${index}`}
-                    style={styles.connectionRow}
-                  >
-                    <View style={styles.connectionDot} />
+          ) : null}
 
-                    <AppText variant="body">
-                      {connection}
-                    </AppText>
-                  </View>
-                ))}
-            </View>
+          {relationGroups.length === 0 ? (
+            getEmptyRelationsText(
+              selection.type,
+            ) === null ? null : (
+              <AppText
+                variant="body"
+                muted
+                style={styles.noConnections}
+              >
+                {getEmptyRelationsText(
+                  selection.type,
+                )}
+              </AppText>
+            )
+          ) : (
+            relationGroups.map((group) => (
+              <RelationGroupBlock
+                key={group.kind}
+                group={group}
+              />
+            ))
           )}
 
           <EvidenceSection
@@ -2167,566 +2201,13 @@ function getYearField(
   return new Date(time).getUTCFullYear();
 }
 
-function buildGraphModel(
-  graph: CareerGraph,
-) {
-  const nodes: GraphNode[] = [
-    {
-      id: 'person',
-      entityId: 'person',
-      label: 'YOU',
-      type: 'person',
-      x: CENTER_X,
-      y: CENTER_Y,
-    },
-  ];
-
-  const edges: GraphEdge[] = [];
-
-  const addNode = (
-    node: GraphNode,
-  ) => {
-    if (
-      nodes.some(
-        (existing) => existing.id === node.id,
-      )
-    ) {
-      return;
-    }
-
-    nodes.push(node);
-  };
-
-  const addEdge = (
-    from: string,
-    to: string,
-  ) => {
-    const id = `${from}-${to}`;
-
-    if (
-      edges.some(
-        (edge) =>
-          edge.id === id ||
-          edge.id === `${to}-${from}`,
-      )
-    ) {
-      return;
-    }
-
-    edges.push({
-      id,
-      from,
-      to,
-    });
-  };
-
-  const skills = graph.userSkills
-    .slice(0, 8)
-    .map((item, index) => {
-      const name = getSkillName(item);
-      const count = Math.min(
-        graph.userSkills.length,
-        8,
-      );
-      const angle =
-        -Math.PI / 2 +
-        (index / Math.max(count, 1)) *
-          Math.PI *
-          2;
-
-      const node: GraphNode = {
-        id: `skill-${getNestedId(item, index)}`,
-        entityId: getSkillId(item, index),
-        label: name,
-        type: 'skill',
-        ...placeNode(
-          'skill',
-          angle,
-          SKILL_RX,
-          SKILL_RY,
-        ),
-      };
-
-      addNode(node);
-      addEdge('person', node.id);
-
-      return node;
-    });
-
-  const projects = graph.projects
-    .slice(0, 5)
-    .map((item, index) => {
-      const count = Math.min(
-        graph.projects.length,
-        5,
-      );
-      const sectorStart = -Math.PI / 3;
-      const sectorEnd = Math.PI / 3;
-      const angle =
-        count <= 1
-          ? (sectorStart + sectorEnd) / 2
-          : sectorStart +
-            ((index + 0.5) / count) *
-              (sectorEnd - sectorStart);
-
-      const node: GraphNode = {
-        id: `project-${getNestedId(item, index)}`,
-        entityId: getNestedId(item, index),
-        label: getProjectName(item),
-        type: 'project',
-        ...placeNode(
-          'project',
-          angle,
-          SPOKE_RX,
-          SPOKE_RY,
-        ),
-      };
-
-      addNode(node);
-      addEdge('person', node.id);
-
-      connectNestedSkills(
-        item,
-        node.id,
-        skills,
-        addEdge,
-      );
-
-      return node;
-    });
-
-  const experiences = graph.experiences
-    .slice(0, 4)
-    .map((item, index) => {
-      const count = Math.min(
-        graph.experiences.length,
-        4,
-      );
-      const sectorStart = (2 * Math.PI) / 3;
-      const sectorEnd = (4 * Math.PI) / 3;
-      const angle =
-        count <= 1
-          ? (sectorStart + sectorEnd) / 2
-          : sectorStart +
-            ((index + 0.5) / count) *
-              (sectorEnd - sectorStart);
-
-      const node: GraphNode = {
-        id: `experience-${getNestedId(item, index)}`,
-        entityId: getNestedId(item, index),
-        label: getExperienceTitle(item),
-        type: 'experience',
-        ...placeNode(
-          'experience',
-          angle,
-          SPOKE_RX,
-          SPOKE_RY,
-        ),
-        subtitle: getCompanyName(item),
-      };
-
-      addNode(node);
-      addEdge('person', node.id);
-
-      return node;
-    });
-
-  const evidence = graph.evidence
-    .slice(0, 5)
-    .map((item, index) => {
-      const count = Math.min(
-        graph.evidence.length,
-        5,
-      );
-      const sectorStart = Math.PI / 4;
-      const sectorEnd = (3 * Math.PI) / 4;
-      const angle =
-        count <= 1
-          ? (sectorStart + sectorEnd) / 2
-          : sectorStart +
-            ((index + 0.5) / count) *
-              (sectorEnd - sectorStart);
-
-      const node: GraphNode = {
-        id: `evidence-${getNestedId(item, index)}`,
-        entityId: getNestedId(item, index),
-        label: getEvidenceTitle(item),
-        type: 'evidence',
-        ...placeNode(
-          'evidence',
-          angle,
-          OUTER_RX,
-          OUTER_RY,
-        ),
-      };
-
-      addNode(node);
-      addEdge('person', node.id);
-
-      return node;
-    });
-
-  graph.achievements
-    .slice(0, 4)
-    .forEach((item, index) => {
-      const count = Math.min(
-        graph.achievements.length,
-        4,
-      );
-      const sectorStart = (5 * Math.PI) / 4;
-      const sectorEnd = (7 * Math.PI) / 4;
-      const angle =
-        count <= 1
-          ? (sectorStart + sectorEnd) / 2
-          : sectorStart +
-            ((index + 0.5) / count) *
-              (sectorEnd - sectorStart);
-
-      const node: GraphNode = {
-        id: `achievement-${getNestedId(item, index)}`,
-        entityId: getNestedId(item, index),
-        label: getAchievementTitle(item),
-        type: 'achievement',
-        ...placeNode(
-          'achievement',
-          angle,
-          OUTER_RX,
-          OUTER_RY,
-        ),
-      };
-
-      addNode(node);
-      addEdge('person', node.id);
-    });
-
-  return {
-    nodes,
-    edges,
-  };
-}
-
-function connectNestedSkills(
-  item: unknown,
-  projectId: string,
-  skills: GraphNode[],
-  addEdge: (
-    from: string,
-    to: string,
-  ) => void,
-) {
-  if (
-    typeof item !== 'object' ||
-    item === null ||
-    !('skills' in item) ||
-    !Array.isArray(item.skills)
-  ) {
-    return;
-  }
-
-  item.skills.forEach((relationship) => {
-    const skillId = readLinkedSkillId(
-      relationship,
-    );
-
-    if (skillId === null) {
-      return;
-    }
-
-    const matchingSkill = skills.find(
-      (skill) => skill.entityId === skillId,
-    );
-
-    if (matchingSkill) {
-      addEdge(projectId, matchingSkill.id);
-    }
-  });
-}
-
-/*
- * Relationship lookup for the details sheet. Everything here resolves by
- * stable database id — Skill.id, Experience.id, Project.id,
- * Achievement.id, Evidence.id. Labels are rendered, never matched.
- */
-/*
- * Relationship lookup for the detail sheet. Everything resolves by stable
- * database id — Skill.id, Experience.id, Project.id, Achievement.id,
- * Evidence.id. Labels are rendered, never matched.
- */
-function getNodeConnections(
-  selection: DetailSelection,
-  graph: CareerGraph,
-  evidenceIndex: EvidenceIndex,
-): string[] {
-  const entityId =
-    selection.entityIds[0] ?? '';
-
-  if (selection.type === 'skill') {
-    const connections: string[] = [];
-
-    const add = (line: string) => {
-      if (!connections.includes(line)) {
-        connections.push(line);
-      }
-    };
-
-    toArray(graph.experiences).forEach(
-      (experience) => {
-        if (
-          hasAnyLinkedSkillId(
-            experience,
-            selection.entityIds,
-          )
-        ) {
-          add(
-            `Experience · ${getExperienceTitle(experience)}`,
-          );
-        }
-      },
-    );
-
-    toArray(graph.projects).forEach(
-      (project) => {
-        if (
-          hasAnyLinkedSkillId(
-            project,
-            selection.entityIds,
-          )
-        ) {
-          add(
-            `Project · ${getProjectName(project)}`,
-          );
-        }
-      },
-    );
-
-    selection.entityIds.forEach((id) => {
-      getEvidenceForSkill(
-        evidenceIndex,
-        id,
-      ).forEach((record) => {
-        add(`Evidence · ${record.title}`);
-      });
-    });
-
-    return connections;
-  }
-
-  if (selection.type === 'project') {
-    const project = findById(
-      graph.projects,
-      entityId,
-    );
-
-    if (!project) {
-      return [];
-    }
-
-    return [
-      ...readRelationNames(
-        project,
-        'skills',
-        'skill',
-        'name',
-      ).map((name) => `Skill · ${name}`),
-      ...readRelationNames(
-        project,
-        'achievements',
-        'achievement',
-        'title',
-      ).map(
-        (name) => `Achievement · ${name}`,
-      ),
-      ...getEvidenceForProject(
-        evidenceIndex,
-        entityId,
-      ).map(
-        (record) =>
-          `Evidence · ${record.title}`,
-      ),
-    ];
-  }
-
-  if (selection.type === 'experience') {
-    const experience = findById(
-      graph.experiences,
-      entityId,
-    );
-
-    if (!experience) {
-      return [];
-    }
-
-    return [
-      getCompanyName(experience),
-      ...readRelationNames(
-        experience,
-        'skills',
-        'skill',
-        'name',
-      ).map((name) => `Skill · ${name}`),
-      ...getEvidenceForExperience(
-        evidenceIndex,
-        entityId,
-      ).map(
-        (record) =>
-          `Evidence · ${record.title}`,
-      ),
-    ];
-  }
-
-  if (selection.type === 'evidence') {
-    const record =
-      evidenceIndex.byId[entityId];
-
-    if (!record) {
-      return [];
-    }
-
-    /*
-     * The API hydrates the name on each evidence join row, so these are
-     * real entity names rather than the placeholders the old
-     * name-matching produced.
-     */
-    return record.links
-      .filter((link) => link.name !== null)
-      .map(
-        (link) =>
-          `${getNodeTypeLabelForLink(link.entityType)} · ${link.name}`,
-      );
-  }
-
-  if (selection.type === 'achievement') {
-    return getEvidenceForAchievement(
-      evidenceIndex,
-      entityId,
-    ).map(
-      (record) =>
-        `Evidence · ${record.title}`,
-    );
-  }
-
-  /*
-   * Education carries no relations in the payload (no EvidenceEducation
-   * table, no skill join), so there is nothing to list.
-   */
-  return [];
-}
-
-function getNodeTypeLabelForLink(
-  entityType: string,
-) {
-  switch (entityType) {
-    case 'skill':
-      return 'Skill';
-
-    case 'experience':
-      return 'Experience';
-
-    case 'project':
-      return 'Project';
-
-    case 'achievement':
-      return 'Achievement';
-
-    default:
-      return 'Related';
-  }
-}
-
-/** Matches a record in a graph collection by its database id. */
-function findById(
-  items: unknown,
-  entityId: string,
-): unknown {
-  return (
-    toArray(items).find(
-      (item) =>
-        getStringField(item, 'id') ===
-        entityId,
-    ) ?? null
-  );
-}
-
-/*
- * True when the record carries a join row pointing at this Skill.id.
- * Reads the join row's own foreign key first, falling back to the
- * hydrated relation's id — never the skill name.
- */
-function hasAnyLinkedSkillId(
-  item: unknown,
-  skillIds: string[],
-) {
-  return toArray(
-    getObjectField(item, 'skills'),
-  ).some((row) => {
-    const linked = readLinkedSkillId(row);
-
-    return (
-      linked !== null &&
-      skillIds.includes(linked)
-    );
-  });
-}
-
-function readLinkedSkillId(
-  row: unknown,
-): string | null {
-  return (
-    getStringField(row, 'skillId') ??
-    getStringField(
-      getObjectField(row, 'skill'),
-      'id',
-    )
-  );
-}
-
-/** Display names pulled from hydrated join rows. */
-function readRelationNames(
-  item: unknown,
-  arrayKey: string,
-  relationKey: string,
-  nameKey: string,
-): string[] {
-  return toArray(
-    getObjectField(item, arrayKey),
-  )
-    .map((row) =>
-      getStringField(
-        getObjectField(row, relationKey),
-        nameKey,
-      ),
-    )
-    .filter(
-      (name): name is string =>
-        name !== null,
-    );
-}
-
-/*
- * A skill node represents the Skill, not the UserSkill join row it came
- * from, so the entity id is the skill's.
- */
-function getSkillId(
-  item: unknown,
-  fallback: number,
-) {
-  return (
-    getStringField(item, 'skillId') ??
-    getStringField(
-      getObjectField(item, 'skill'),
-      'id',
-    ) ??
-    `index-${fallback}`
-  );
-}
-
 function getNodeStyle(
   type: DetailEntityType,
 ) {
   switch (type) {
     case 'education':
       return {
-        radius: 28,
+        radius: NODE_RADIUS.education,
         fill: '#EDE9FE',
         stroke: '#7C3AED',
         text: '#5B21B6',
@@ -2735,7 +2216,7 @@ function getNodeStyle(
 
     case 'person':
       return {
-        radius: 42,
+        radius: NODE_RADIUS.person,
         fill: colors.primary,
         stroke: colors.primary,
         text: colors.primaryText,
@@ -2744,7 +2225,7 @@ function getNodeStyle(
 
     case 'skill':
       return {
-        radius: 28,
+        radius: NODE_RADIUS.skill,
         fill: '#E0E7FF',
         stroke: '#6366F1',
         text: '#3730A3',
@@ -2753,7 +2234,7 @@ function getNodeStyle(
 
     case 'experience':
       return {
-        radius: 31,
+        radius: NODE_RADIUS.experience,
         fill: '#DCFCE7',
         stroke: '#16A34A',
         text: '#166534',
@@ -2762,7 +2243,7 @@ function getNodeStyle(
 
     case 'project':
       return {
-        radius: 30,
+        radius: NODE_RADIUS.project,
         fill: '#FEF3C7',
         stroke: '#D97706',
         text: '#92400E',
@@ -2771,7 +2252,7 @@ function getNodeStyle(
 
     case 'evidence':
       return {
-        radius: 27,
+        radius: NODE_RADIUS.evidence,
         fill: '#FCE7F3',
         stroke: '#DB2777',
         text: '#9D174D',
@@ -2780,7 +2261,7 @@ function getNodeStyle(
 
     case 'achievement':
       return {
-        radius: 29,
+        radius: NODE_RADIUS.achievement,
         fill: '#E0F2FE',
         stroke: '#0284C7',
         text: '#075985',
@@ -2852,125 +2333,6 @@ function truncate(
   }
 
   return `${value.slice(0, length - 1)}…`;
-}
-
-function getNestedId(
-  item: unknown,
-  fallback: number,
-) {
-  if (
-    typeof item === 'object' &&
-    item !== null &&
-    'id' in item &&
-    typeof item.id === 'string'
-  ) {
-    return item.id;
-  }
-
-  return String(fallback);
-}
-
-function getSkillName(item: unknown) {
-  if (
-    typeof item === 'object' &&
-    item !== null &&
-    'skill' in item &&
-    typeof item.skill === 'object' &&
-    item.skill !== null &&
-    'name' in item.skill &&
-    typeof item.skill.name === 'string'
-  ) {
-    return item.skill.name;
-  }
-
-  if (
-    typeof item === 'object' &&
-    item !== null &&
-    'name' in item &&
-    typeof item.name === 'string'
-  ) {
-    return item.name;
-  }
-
-  return 'Skill';
-}
-
-function getExperienceTitle(
-  item: unknown,
-) {
-  if (
-    typeof item === 'object' &&
-    item !== null &&
-    'title' in item &&
-    typeof item.title === 'string'
-  ) {
-    return item.title;
-  }
-
-  return 'Experience';
-}
-
-function getCompanyName(
-  item: unknown,
-) {
-  if (
-    typeof item === 'object' &&
-    item !== null &&
-    'company' in item &&
-    typeof item.company === 'object' &&
-    item.company !== null &&
-    'name' in item.company &&
-    typeof item.company.name === 'string'
-  ) {
-    return item.company.name;
-  }
-
-  return 'Company not specified';
-}
-
-function getProjectName(
-  item: unknown,
-) {
-  if (
-    typeof item === 'object' &&
-    item !== null &&
-    'name' in item &&
-    typeof item.name === 'string'
-  ) {
-    return item.name;
-  }
-
-  return 'Project';
-}
-
-function getEvidenceTitle(
-  item: unknown,
-) {
-  if (
-    typeof item === 'object' &&
-    item !== null &&
-    'title' in item &&
-    typeof item.title === 'string'
-  ) {
-    return item.title;
-  }
-
-  return 'Evidence';
-}
-
-function getAchievementTitle(
-  item: unknown,
-) {
-  if (
-    typeof item === 'object' &&
-    item !== null &&
-    'title' in item &&
-    typeof item.title === 'string'
-  ) {
-    return item.title;
-  }
-
-  return 'Achievement';
 }
 
 const styles = StyleSheet.create({
@@ -3045,6 +2407,45 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     borderRadius: radius.lg,
     backgroundColor: colors.muted,
+  },
+
+  lensRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+    marginTop: spacing.md,
+  },
+
+  lensChip: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+  },
+
+  lensChipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+
+  lensChipIdle: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+  },
+
+  lensChipText: {
+    color: colors.textSecondary,
+  },
+
+  lensChipTextActive: {
+    color: colors.primaryText,
+    fontWeight: '700',
+  },
+
+  truncationNote: {
+    marginTop: spacing.sm,
+    fontSize: 12,
+    lineHeight: 16,
   },
 
   legend: {
@@ -3352,6 +2753,14 @@ const styles = StyleSheet.create({
 
   noConnections: {
     marginTop: spacing.md,
+  },
+
+  relationGroup: {
+    marginBottom: spacing.md,
+  },
+
+  sheetContext: {
+    marginBottom: spacing.md,
   },
 
   sheetScroll: {

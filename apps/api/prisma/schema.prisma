@@ -34,6 +34,32 @@ enum EvidenceSourceType {
   OTHER
 }
 
+/// Which external system an ExternalConnection speaks to. Separate from
+/// EvidenceSourceType, which describes where a piece of evidence came from:
+/// a source can produce evidence without us ever holding a connection to it
+/// (RESUME, MANUAL), and a connection is a credential-bearing relationship
+/// that only some sources have.
+enum ExternalProvider {
+  GITHUB
+  PORTFOLIO
+}
+
+enum ExternalConnectionStatus {
+  ACTIVE
+  INVALID
+  REVOKED
+}
+
+/// PARTIAL is not a failure. A sync that read 30 of 40 repositories
+/// succeeded at what it did and must not claim the other 10 were empty -
+/// see the completeness contract in docs/external-evidence.
+enum ExternalSyncStatus {
+  RUNNING
+  SUCCEEDED
+  PARTIAL
+  FAILED
+}
+
 model User {
   id        String   @id @db.Uuid
   createdAt DateTime @default(now())
@@ -49,6 +75,10 @@ model User {
   resumeImports         ResumeImport[]
   educations            Education[]
   careerGraphIngestions CareerGraphIngestion[]
+
+  externalConnections        ExternalConnection[]
+  oauthAuthorizationRequests OAuthAuthorizationRequest[]
+  externalSyncRuns           ExternalSyncRun[]
 }
 
 model Profile {
@@ -249,6 +279,16 @@ model Evidence {
   achievements EvidenceAchievement[]
   educations   EvidenceEducation[]
 
+  /// Deduplication key for re-syncable sources.
+  ///
+  /// A resume is confirmed once; an external source is pulled again and
+  /// again, so re-ingesting must update in place rather than accumulate a
+  /// new row per sync. externalId is nullable and Postgres treats NULLs as
+  /// DISTINCT, so every existing resume row - all of which carry NULL - is
+  /// unaffected and needs no backfill. NULLS NOT DISTINCT would invert
+  /// that and is deliberately not used: it would fail on the second resume
+  /// evidence row for a user.
+  @@unique([userId, sourceType, externalId])
   @@index([userId])
   @@index([userId, sourceType])
   @@index([userId, capturedAt])
@@ -391,4 +431,153 @@ model EvidenceAchievement {
 
   @@id([evidenceId, achievementId])
   @@index([achievementId])
+}
+
+/*
+ * ------------------------------------------------------------------
+ * EXTERNAL EVIDENCE LAYER (Phase 7)
+ * ------------------------------------------------------------------
+ *
+ * These three tables are additive. Nothing above them changes, and in
+ * particular CareerGraphIngestion is left exactly as it is: it is keyed to
+ * a ResumeImport by a NOT NULL foreign key, and widening that to carry a
+ * source with entirely different semantics - a resume is confirmed once, a
+ * connection is re-synced forever - would weaken a live invariant to serve
+ * a case that a new table serves without touching anything.
+ *
+ * See docs/external-evidence/phase-7-0-decisions.md.
+ */
+
+/// A credential-bearing relationship between one user and one external
+/// provider.
+///
+/// Identity is the provider's IMMUTABLE numeric account id, never the
+/// login. GitHub logins are user-changeable and, once released, claimable
+/// by somebody else - so resolving a connection by login is a live
+/// cross-user data-leak bug, not a style preference. The login is stored
+/// for display and refreshed on each sync.
+model ExternalConnection {
+  id       String           @id @default(uuid()) @db.Uuid
+  userId   String           @db.Uuid
+  provider ExternalProvider
+
+  /// The provider's immutable numeric account id, held as text so a
+  /// provider whose ids are not numeric can reuse this table.
+  externalAccountId String
+  /// Display only. Mutable at the provider; never used as a lookup key.
+  externalAccountLogin String
+
+  /*
+   * Token material. Nullable because not every provider is
+   * credential-bearing: a PORTFOLIO connection is a public URL and holds
+   * no token at all.
+   *
+   * Encrypted with AES-256-GCM. The AAD binds each ciphertext to the user
+   * that owns it, so a row copied into another user's record fails to
+   * decrypt rather than silently working - without that, anyone able to
+   * UPDATE this table could sync as a victim.
+   */
+  tokenCiphertext Bytes?
+  tokenIv         Bytes?
+  tokenTag        Bytes?
+  /// Which key encrypted this row. Per-row rather than global so rotation
+  /// can re-encrypt lazily instead of in one migration.
+  tokenKeyVersion Int?
+  tokenAlg        String?
+
+  /// What the provider ACTUALLY granted, which can differ from what was
+  /// requested. Checked before calling an endpoint, never assumed.
+  grantedScopes String[]
+
+  status ExternalConnectionStatus @default(ACTIVE)
+
+  lastVerifiedAt DateTime?
+  lastSyncedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  syncRuns ExternalSyncRun[]
+
+  /// One connection per provider per user.
+  @@unique([userId, provider])
+  /// One user per external account. This is what caps the blast radius of
+  /// an account-linking CSRF: a successful attack becomes a unique-
+  /// constraint conflict instead of one attacker account silently
+  /// attached to many victims.
+  @@unique([provider, externalAccountId])
+}
+
+/// A pending OAuth authorization, created before the user is sent to the
+/// provider and consumed exactly once when they come back.
+///
+/// This table is the ONLY thing that answers "which of our users does this
+/// callback belong to". The callback arrives in a system browser that
+/// carries no session for a bearer-token API, so there is no ambient user
+/// to read - which is the correct design, not a limitation. Deriving the
+/// owner from a session instead is the account-linking CSRF: an attacker
+/// authorizes as themselves, withholds the callback, and induces a
+/// logged-in victim to replay it, binding the attacker's provider account
+/// to the victim's profile.
+model OAuthAuthorizationRequest {
+  id       String           @id @default(uuid()) @db.Uuid
+  userId   String           @db.Uuid
+  provider ExternalProvider
+
+  /// sha256(state), never the state itself. A read-only leak of this table
+  /// then yields nothing replayable.
+  stateHash String @unique
+
+  /// PKCE verifier, encrypted at rest like any other credential. It is
+  /// short-lived, but a verifier in the clear turns a leaked authorization
+  /// code back into a redeemable one.
+  codeVerifierCiphertext Bytes
+  codeVerifierIv         Bytes
+  codeVerifierTag        Bytes
+  codeVerifierKeyVersion Int
+
+  /// Recorded so the callback can verify the URI it arrived on matches the
+  /// one the request went out with.
+  redirectUri String
+  /// The scope string actually sent. Always sent explicitly: omitting it
+  /// makes the provider grant every scope the user ever approved for this
+  /// application.
+  scope String
+
+  expiresAt  DateTime
+  /// Set by an atomic compare-and-swap. A second consumption is an attack
+  /// signal, not a retry.
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// The source-generic ingestion ledger: one row per sync attempt.
+///
+/// stats carries the completeness record - reposScanned, reposTotal and
+/// the per-repository markers. A run that read fewer repositories than it
+/// found is PARTIAL. It must never be reported as SUCCEEDED, because a
+/// repository that was skipped for rate-limit budget is not a repository
+/// with no work in it.
+model ExternalSyncRun {
+  id           String             @id @default(uuid()) @db.Uuid
+  connectionId String             @db.Uuid
+  userId       String             @db.Uuid
+  status       ExternalSyncStatus @default(RUNNING)
+
+  startedAt    DateTime  @default(now())
+  finishedAt   DateTime?
+  errorMessage String?
+  stats        Json?
+
+  connection ExternalConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([connectionId, startedAt])
+  @@index([userId])
 }

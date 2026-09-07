@@ -6,6 +6,7 @@ import { AuthModule } from './auth/auth.module.js';
 import { HealthController } from './health.controller.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { ResumeImportModule } from './resume-import/resume-import.module.js';
+import { IntegrationsModule } from './integrations/integrations.module.js';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { ResumeImportModule } from './resume-import/resume-import.module.js';
     ResumeImportModule,
     ResumeProcessingModule,
     CareerGraphModule,
+    IntegrationsModule,
   ],
   controllers: [HealthController],
 })

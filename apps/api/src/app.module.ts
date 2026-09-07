@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { CareerGraphModule } from './career-graph/career-graph.module.js';
 import { ConfigModule } from '@nestjs/config';
 import { ResumeProcessingModule } from './resume-processing/resume-processing.module.js';
 import { AuthModule } from './auth/auth.module.js';
@@ -15,6 +16,7 @@ import { ResumeImportModule } from './resume-import/resume-import.module.js';
     PrismaModule,
     ResumeImportModule,
     ResumeProcessingModule,
+    CareerGraphModule,
   ],
   controllers: [HealthController],
 })

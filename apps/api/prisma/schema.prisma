@@ -39,15 +39,16 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  profile       Profile?
-  experiences   Experience[]
-  projects      Project[]
-  userSkills    UserSkill[]
-  achievements  Achievement[]
-  evidence      Evidence[]
-  goals         Goal[]
-  resumeImports ResumeImport[]
-  educations    Education[]
+  profile               Profile?
+  experiences           Experience[]
+  projects              Project[]
+  userSkills            UserSkill[]
+  achievements          Achievement[]
+  evidence              Evidence[]
+  goals                 Goal[]
+  resumeImports         ResumeImport[]
+  educations            Education[]
+  careerGraphIngestions CareerGraphIngestion[]
 }
 
 model Profile {
@@ -98,15 +99,16 @@ model Company {
 }
 
 model ResumeImport {
-  id               String             @id @default(uuid()) @db.Uuid
-  userId           String             @db.Uuid
-  fileName         String
-  storagePath      String
-  status           ResumeImportStatus @default(PENDING)
-  extractionResult Json?
-  errorMessage     String?
-  createdAt        DateTime           @default(now())
-  updatedAt        DateTime           @updatedAt
+  id                   String                @id @default(uuid()) @db.Uuid
+  userId               String                @db.Uuid
+  fileName             String
+  storagePath          String
+  status               ResumeImportStatus    @default(PENDING)
+  extractionResult     Json?
+  errorMessage         String?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  careerGraphIngestion CareerGraphIngestion?
 
   user     User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   evidence Evidence[]
@@ -252,6 +254,19 @@ model Goal {
 
   @@index([userId])
   @@index([userId, targetDate])
+}
+
+model CareerGraphIngestion {
+  id             String   @id @default(uuid()) @db.Uuid
+  resumeImportId String   @unique @db.Uuid
+  userId         String   @db.Uuid
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  resumeImport ResumeImport @relation(fields: [resumeImportId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model ExperienceProject {

@@ -916,6 +916,7 @@ describe('POST /v1/github/sync', () => {
       created: 2,
       updated: 0,
       reposScanned: 2,
+      reposRevalidated: 0,
       reposTotal: 2,
       reposSkipped: 0,
     });

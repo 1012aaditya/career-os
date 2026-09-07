@@ -6,7 +6,10 @@ import { fromStorageBytes } from '../crypto/bytes.js';
 import { EncryptionService } from '../crypto/encryption.service.js';
 
 import { ExternalSyncRunService } from './external-sync-run.service.js';
-import { GithubIngestionService } from './github-ingestion.service.js';
+import {
+  GithubIngestionService,
+  type PriorRepositoryState,
+} from './github-ingestion.service.js';
 import { GithubRequestError } from './github-rest.client.js';
 import { GithubEvidenceRepository } from './evidence/github-evidence.repository.js';
 import { projectSyncEvidence } from './evidence/evidence-projection.js';
@@ -124,8 +127,16 @@ export type GithubSyncSummary = {
     created: number;
     /** Evidence rows already present and re-observed by this run. */
     updated: number;
-    /** Repositories actually looked at. */
+    /** Repositories with an established count, freshly read or carried. */
     reposScanned: number;
+    /*
+     * Of those, how many were carried forward from a previous run because
+     * their last push had not moved, rather than re-read.
+     *
+     * Reported separately because otherwise a steady-state sync says "40
+     * scanned" having read none of them, which overstates what it did.
+     */
+    reposRevalidated: number;
     /** Repositories the listing found, scanned or not. */
     reposTotal: number;
     /*
@@ -174,6 +185,172 @@ function sanitizedReason(error: unknown): string {
   }
 
   return 'internal_error';
+}
+
+/*
+ * Reads one stored Evidence row back into prior state, or returns null.
+ *
+ * Everything is validated rather than asserted. A row whose metadata is
+ * missing, malformed, or written by an older shape must produce null and
+ * be re-read from GitHub - never a partially-trusted state that could let
+ * a repository be skipped on the strength of a value nobody wrote.
+ *
+ * Null is the safe answer everywhere here: it costs one repository's
+ * worth of requests and guarantees the count is re-derived.
+ */
+function readPriorState(row: {
+  externalId: string | null;
+  metadata: unknown;
+}): PriorRepositoryState | null {
+  if (
+    row.externalId === null ||
+    typeof row.metadata !== 'object' ||
+    row.metadata === null ||
+    Array.isArray(row.metadata)
+  ) {
+    return null;
+  }
+
+  const metadata = row.metadata as Record<
+    string,
+    unknown
+  >;
+
+  const repository = asRecord(
+    metadata['repository'],
+  );
+
+  const completeness = asRecord(
+    metadata['completeness'],
+  );
+
+  const activity = asRecord(
+    metadata['activity'],
+  );
+
+  if (
+    repository === null ||
+    completeness === null ||
+    activity === null
+  ) {
+    return null;
+  }
+
+  const commits = completeness['commits'];
+
+  if (
+    commits !== 'DEFAULT_BRANCH_ONLY' &&
+    commits !== 'NOT_SCANNED' &&
+    commits !== 'ACCESS_LOST'
+  ) {
+    return null;
+  }
+
+  const scannedAt = completeness['scannedAt'];
+
+  if (typeof scannedAt !== 'string') {
+    return null;
+  }
+
+  return {
+    externalId: row.externalId,
+    pushedAt: asStringOrNull(
+      repository['pushedAt'],
+    ),
+    defaultBranch: asStringOrNull(
+      repository['defaultBranch'],
+    ),
+    scannedSince: asStringOrNull(
+      completeness['scannedSince'],
+    ),
+    /*
+     * Anything other than an explicit false is treated as truncated, so
+     * an absent or unreadable flag can never be mistaken for a complete
+     * count and carried forward.
+     */
+    truncated: completeness['truncated'] !== false,
+    commits,
+    scannedAt,
+    activity: {
+      commitsAttributed: asCountOrNull(
+        activity['commitsAttributed'],
+      ),
+      pullRequestsAuthored: asCountOrNull(
+        activity['pullRequestsAuthored'],
+      ),
+      issuesAuthored: asCountOrNull(
+        activity['issuesAuthored'],
+      ),
+      firstActivityAt: asStringOrNull(
+        activity['firstActivityAt'],
+      ),
+      lastActivityAt: asStringOrNull(
+        activity['lastActivityAt'],
+      ),
+    },
+    languages: readLanguages(
+      metadata['languages'],
+    ),
+  };
+}
+
+function asRecord(
+  value: unknown,
+): Record<string, unknown> | null {
+  return typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asStringOrNull(
+  value: unknown,
+): string | null {
+  return typeof value === 'string' &&
+    value.length > 0
+    ? value
+    : null;
+}
+
+function asCountOrNull(
+  value: unknown,
+): number | null {
+  return typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value >= 0
+    ? value
+    : null;
+}
+
+function readLanguages(
+  value: unknown,
+): Array<{ name: string; bytes: number }> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const languages: Array<{
+    name: string;
+    bytes: number;
+  }> = [];
+
+  for (const entry of value) {
+    const record = asRecord(entry);
+
+    if (record === null) {
+      continue;
+    }
+
+    const name = asStringOrNull(record['name']);
+    const bytes = asCountOrNull(record['bytes']);
+
+    if (name !== null && bytes !== null) {
+      languages.push({ name, bytes });
+    }
+  }
+
+  return languages;
 }
 
 @Injectable()
@@ -277,6 +454,10 @@ export class GithubSyncService {
           scannedSince,
           repositoryScanBudget:
             options.repositoryScanBudget,
+          priorRepositories:
+            await this.readPriorRepositories(
+              userId,
+            ),
         });
 
       const projected =
@@ -330,6 +511,29 @@ export class GithubSyncService {
       observation,
     );
 
+    /*
+     * Written AFTER the ledger closes, and never allowed to fail the
+     * sync. finish() throws deliberately when a run is no longer RUNNING,
+     * so stamping this first would claim a completion that then did not
+     * happen.
+     *
+     * It means "a sync run completed", NOT "the data is fresh to this
+     * point" - PARTIAL is the normal outcome for any account over the
+     * scan budget, and those repositories are genuinely unobserved. The
+     * status is returned alongside so a client can say which.
+     */
+    await this.stampLastSyncedAt(
+      userId,
+      run.id,
+    );
+
+    const reposRevalidated =
+      observation.repositories.filter(
+        (repository) =>
+          repository.completeness
+            .revalidatedBy !== null,
+      ).length;
+
     return {
       runId: run.id,
       status,
@@ -338,6 +542,12 @@ export class GithubSyncService {
         updated,
         reposScanned:
           observation.completeness.reposScanned,
+        /*
+         * Separated from reposScanned on purpose. Without it a steady
+         * state reads "40 scanned" when nothing was re-read, which
+         * overstates what the run did.
+         */
+        reposRevalidated,
         reposTotal:
           observation.completeness.reposTotal,
         reposSkipped: skipped,
@@ -349,6 +559,91 @@ export class GithubSyncService {
         observation.completeness.truncated,
       error: null,
     };
+  }
+
+  /**
+   * What previous runs established, keyed by the row's own unique key.
+   *
+   * Scoped by userId AND sourceType in the WHERE clause, not filtered in
+   * JavaScript afterwards. This map decides whether a repository is
+   * re-read, and a cross-user key here would carry one person's commit
+   * counts onto another person's evidence - a corruption that is silent,
+   * durable and unfalsifiable after the fact.
+   *
+   * Keyed on externalId rather than metadata.repository.repoId: the
+   * former is the column the unique index is built on, so it cannot
+   * collide. Keying on a field read back out of JSON would reintroduce
+   * identity-by-metadata, which is exactly what externalId exists to
+   * avoid - and rows with unreadable metadata would collapse onto one
+   * undefined key whose winner depended on row order.
+   *
+   * orderBy is stated even though the unique index makes contents
+   * order-independent, because it documents that this read must never
+   * become order-sensitive if a limit is ever added.
+   */
+  private async readPriorRepositories(
+    userId: string,
+  ): Promise<
+    ReadonlyMap<string, PriorRepositoryState>
+  > {
+    const rows =
+      await this.prisma.evidence.findMany({
+        where: {
+          userId,
+          sourceType: 'GITHUB',
+        },
+        select: {
+          externalId: true,
+          metadata: true,
+        },
+        orderBy: { externalId: 'asc' },
+      });
+
+    const prior = new Map<
+      string,
+      PriorRepositoryState
+    >();
+
+    for (const row of rows) {
+      const state = readPriorState(row);
+
+      if (state !== null) {
+        prior.set(state.externalId, state);
+      }
+    }
+
+    return prior;
+  }
+
+  /*
+   * Records that a run finished. Failure here is swallowed on purpose:
+   * the sync succeeded, the ledger says so, and a bookkeeping write must
+   * not turn that into an error the user sees.
+   *
+   * updateMany, not update - disconnect DELETES the connection row, so a
+   * disconnect racing a long sync would make update() throw P2025 after
+   * the work was already done. The data payload names one field, so this
+   * write is structurally incapable of touching a token column.
+   */
+  private async stampLastSyncedAt(
+    userId: string,
+    runId: string,
+  ): Promise<void> {
+    try {
+      await this.prisma.externalConnection.updateMany(
+        {
+          where: {
+            userId,
+            provider: PROVIDER,
+          },
+          data: { lastSyncedAt: new Date() },
+        },
+      );
+    } catch {
+      this.logger.warn(
+        `Could not stamp lastSyncedAt for run ${runId}`,
+      );
+    }
   }
 
   /**

@@ -338,3 +338,82 @@ assumption would be wrong.
   undocumented — hence rule 2 under D1.
 - What GitHub's consent screen renders for a minimal-scope request is
   undocumented.
+
+---
+
+## Phase 7.6 amendment — incremental sync
+
+Recorded here because 7.6 changes what two contract terms mean, and an
+implementation that quietly redefines a term is worse than one that
+argues for the change.
+
+### `pushed_at` is cheaper than a conditional request, not better
+
+An earlier draft of 7.6 claimed `pushed_at` was "a strictly better change
+signal" than an ETag. That was wrong and is corrected here.
+
+GitHub resolves commit authorship at READ time, by matching a commit's
+author email against verified emails on accounts. So a user who adds an
+old verified email to their GitHub account gains attributed commits with
+no push at all — and that is precisely the "my old work finally shows up"
+event this product exists to capture. Other cases: a contributor account
+being deleted, an email being unverified, and GitHub recomputing linguist
+language classifications server-side.
+
+The asymmetry is what makes the trade acceptable. `pushed_at` MOVING is
+always safe — it costs an unnecessary rescan. `pushed_at` NOT moving while
+the underlying data changed is the unsafe direction, and the cases above
+are real if uncommon. A default-branch change is the one case serious
+enough to exclude outright, so `canRevalidate` compares `defaultBranch`.
+
+`completeness.revalidatedBy` records the basis of every carried count, so
+if this judgement proves wrong there is a way to find every affected row
+and re-derive it. Without that field, revalidated rows would be
+indistinguishable from freshly read ones and the decision would be
+irreversible.
+
+### ETag persistence is deferred as a cost choice, not an impossibility
+
+`ExternalSyncRun.stats` is a `Json?` column that already holds a
+per-repository array keyed by `externalId`. It is a legitimate home for
+transport-level cache validators: run-scoped, server-side, never exported.
+So the honest statement is that ETags were deferred because `pushed_at`
+costs zero requests where an ETag costs one, not because there was
+nowhere to put them.
+
+Before any ETag work touches the paginated path, note that
+`GithubRestClient.getAll` does not forward an ETag to its per-page `get`,
+and on a 304 it breaks with `items: []` and `truncated: true`. A 304 on
+page one of a commit walk would therefore read as zero commits under
+`DEFAULT_BRANCH_ONLY` — "we did not look" rendered as "this person did
+nothing", the exact defamation the completeness contract exists to
+prevent.
+
+### `reposScanned` now means "has an established count"
+
+Under incremental sync a run can report SUCCEEDED having deep-read no
+repositories at all, because every one was revalidated. `reposScanned`
+therefore means "repositories with an established count, freshly read or
+carried forward", not "repositories looked at in this run".
+
+This is an intentional widening, not an emergent one. `reposRevalidated`
+is reported alongside it so the two are separable and a steady-state sync
+can say "35 unchanged, 5 re-read" rather than claiming it scanned forty.
+
+### A run may not report SUCCEEDED when authored activity failed
+
+The cross-repository `/issues` call supplies every repository's pull
+request and issue counts. When it fails, each repository was still
+scanned, so no per-repository completeness value expresses the hole.
+`SyncCompleteness.authoredActivityEstablished` closes that: a run whose
+authored-activity query failed is PARTIAL.
+
+### The budget stops being a permanent ceiling
+
+A consequence worth recording, because it is the strongest argument for
+this phase and was not the one it was justified by. Revalidated
+repositories are cheap, so the scan budget is spent on repositories that
+actually need reading. An account with more repositories than the budget
+reaches full coverage over several syncs instead of never. This holds
+*because* the listing is sorted by creation date — a second reason
+`sort=created` must not change.

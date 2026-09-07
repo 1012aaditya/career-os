@@ -155,7 +155,29 @@ const RUN_VARYING_COMPLETENESS = [
   'reposTotal',
   'listingTruncated',
   'previouslyObservedAt',
+  /*
+   * Not an observation about the work - it says the repository row was
+   * touched, and this run recorded it either way.
+   */
+  'revalidatedBy',
 ];
+
+/*
+ * Repository fields that move without the work moving.
+ *
+ * GitHub's repo updated_at advances on a star, a watch, a topic edit, a
+ * description change or an archive - none of which is a push, and all of
+ * which are far more common than pushes on any repository with an
+ * audience. Comparing it would make isUnchanged fail on those, rewrite
+ * the row, and re-stamp capturedAt - which then reorders the evidence
+ * sheet, since it sorts by capturedAt desc. The value is still STORED;
+ * it is only excluded from the question "did anything we care about
+ * change".
+ *
+ * pushedAt is deliberately NOT in this list: a push is exactly the thing
+ * that means the work moved.
+ */
+const RUN_VARYING_REPOSITORY = ['updatedAt'];
 
 /*
  * The comparable view of metadata: everything except the run-varying
@@ -197,9 +219,22 @@ function comparableMetadata(
     }
   }
 
+  const repository =
+    typeof source['repository'] === 'object' &&
+    source['repository'] !== null
+      ? { ...(source['repository'] as Record<string, unknown>) }
+      : undefined;
+
+  if (repository) {
+    for (const field of RUN_VARYING_REPOSITORY) {
+      delete repository[field];
+    }
+  }
+
   return canonicalJson({
     ...source,
     ...(completeness ? { completeness } : {}),
+    ...(repository ? { repository } : {}),
   });
 }
 
@@ -234,6 +269,69 @@ const NON_OBSERVING = new Set([
   'NOT_SCANNED',
   'ACCESS_LOST',
 ]);
+
+/*
+ * Would this write replace a real count with an absence?
+ *
+ * The merge above is gated on the INCOMING completeness being NOT_SCANNED
+ * or ACCESS_LOST. That covered every case that existed when it was
+ * written, and stops covering them the moment anything can produce a
+ * DEFAULT_BRANCH_ONLY row with a null count - which incremental sync can,
+ * if the prior-state read fails, a key does not match, or an exception
+ * path returns the bare listing shell.
+ *
+ * Such a row is self-consistently wrong: the projection renders "commit
+ * attribution was not established", which reads as an honest sentence
+ * over a row that just erased 214 commits. Nothing downstream would flag
+ * it. So the guard is here, at the write, where the previous value is
+ * still visible.
+ *
+ * Deliberately asymmetric: a real count replacing an absence is fine, and
+ * a real count replacing a different real count is fine. Only the
+ * direction that destroys knowledge is refused.
+ */
+function wouldEraseKnownCount(
+  storedMetadata: unknown,
+  incomingMetadata: unknown,
+): boolean {
+  const stored = commitCountOf(storedMetadata);
+
+  return (
+    stored !== null &&
+    commitCountOf(incomingMetadata) === null
+  );
+}
+
+function commitCountOf(
+  metadata: unknown,
+): number | null {
+  if (
+    typeof metadata !== 'object' ||
+    metadata === null
+  ) {
+    return null;
+  }
+
+  const activity = (
+    metadata as Record<string, unknown>
+  )['activity'];
+
+  if (
+    typeof activity !== 'object' ||
+    activity === null
+  ) {
+    return null;
+  }
+
+  const count = (
+    activity as Record<string, unknown>
+  )['commitsAttributed'];
+
+  return typeof count === 'number' &&
+    Number.isFinite(count)
+    ? count
+    : null;
+}
 
 function completenessOf(
   metadata: unknown,
@@ -427,11 +525,21 @@ export class GithubEvidenceRepository {
      * counts and no languages, and writing it through would destroy an
      * observation that was true when it was captured.
      */
+    /*
+     * Merge when the incoming run did not observe, OR when it claims to
+     * have observed but carries no count over a row that has one. The
+     * second condition is the one that catches a carry-forward that
+     * silently failed to carry.
+     */
     const merged =
       existing !== null &&
-      NON_OBSERVING.has(
+      (NON_OBSERVING.has(
         completenessOf(next.metadata) ?? '',
-      )
+      ) ||
+        wouldEraseKnownCount(
+          existing.metadata,
+          next.metadata,
+        ))
         ? {
             ...next,
             metadata: jsonMetadata(
@@ -535,9 +643,14 @@ export class GithubEvidenceRepository {
        * that loses one would still blank the winner's observation, which
        * is precisely the case the merge exists for.
        */
-      const recovered = NON_OBSERVING.has(
-        completenessOf(next.metadata) ?? '',
-      )
+      const recovered =
+        NON_OBSERVING.has(
+          completenessOf(next.metadata) ?? '',
+        ) ||
+        wouldEraseKnownCount(
+          winner.metadata,
+          next.metadata,
+        )
         ? {
             ...next,
             metadata: jsonMetadata(

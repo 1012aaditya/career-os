@@ -921,6 +921,7 @@ describe('what the persisted row is allowed to say', () => {
       'completeness.listingTruncated',
       'completeness.reposScanned',
       'completeness.reposTotal',
+      'completeness.revalidatedBy',
       'completeness.scannedAt',
       'completeness.scannedSince',
       'completeness.truncated',

@@ -292,6 +292,45 @@ export function createInMemoryPrisma() {
       return row;
     },
 
+    /*
+     * updateMany rather than update, mirroring how the sync service must
+     * write lastSyncedAt: disconnect DELETES the connection row, so a
+     * disconnect racing a long sync would make update() throw P2025 after
+     * the sync had already succeeded. updateMany no-ops on zero rows.
+     */
+    updateMany: async ({
+      where,
+      data,
+    }: {
+      where: {
+        userId?: string;
+        provider?: string;
+        id?: string;
+      };
+      data: Record<string, unknown>;
+    }) => {
+      const matches = connections.filter(
+        (row) => {
+          if (where.id) {
+            return row.id === where.id;
+          }
+
+          return (
+            (!where.userId ||
+              row.userId === where.userId) &&
+            (!where.provider ||
+              row.provider === where.provider)
+          );
+        },
+      );
+
+      for (const row of matches) {
+        Object.assign(row, data);
+      }
+
+      return { count: matches.length };
+    },
+
     delete: async ({
       where,
     }: {
@@ -436,13 +475,24 @@ export function createInMemoryPrisma() {
       );
     },
 
+    /*
+     * Honours select and orderBy for real.
+     *
+     * A double that ignored orderBy would make a prior-state map that
+     * silently depends on row order look deterministic, which is the one
+     * property those tests exist to prove. Rows are returned in reverse
+     * insertion order by default so an implementation that forgets
+     * orderBy is caught rather than accidentally passing.
+     */
     findMany: async (args?: {
       where?: {
         userId?: string;
         sourceType?: string;
       };
-    }) =>
-      evidence.filter((row) => {
+      select?: Record<string, boolean>;
+      orderBy?: Record<string, 'asc' | 'desc'>;
+    }) => {
+      const matched = evidence.filter((row) => {
         const w = args?.where;
         if (!w) return true;
         if (w.userId && row.userId !== w.userId) return false;
@@ -453,7 +503,45 @@ export function createInMemoryPrisma() {
           return false;
         }
         return true;
-      }),
+      });
+
+      const ordered = args?.orderBy
+        ? [...matched].sort((a, b) => {
+            const [field, dir] = Object.entries(
+              args.orderBy!,
+            )[0]!;
+
+            const av = String(
+              (a as unknown as Record<string, unknown>)[field] ?? '',
+            );
+            const bv = String(
+              (b as unknown as Record<string, unknown>)[field] ?? '',
+            );
+
+            const cmp =
+              av < bv ? -1 : av > bv ? 1 : 0;
+
+            return dir === 'desc' ? -cmp : cmp;
+          })
+        : [...matched].reverse();
+
+      if (!args?.select) {
+        return ordered;
+      }
+
+      const fields = Object.keys(
+        args.select,
+      ).filter((key) => args.select![key]);
+
+      return ordered.map((row) =>
+        Object.fromEntries(
+          fields.map((field) => [
+            field,
+            (row as unknown as Record<string, unknown>)[field],
+          ]),
+        ),
+      ) as unknown as EvidenceRow[];
+    },
 
     create: async ({
       data,

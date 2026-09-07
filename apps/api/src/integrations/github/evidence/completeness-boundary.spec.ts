@@ -880,6 +880,11 @@ describe('completeness at the Evidence boundary', () => {
       expect(
         boundary.metadata(960).completeness,
       ).toEqual({
+        /*
+         * revalidatedBy records HOW a count survived a run that did not
+         * re-derive it - null here because this run read GitHub.
+         */
+        revalidatedBy: null,
         commits: 'DEFAULT_BRANCH_ONLY',
         scannedSince: '2025-01-01T00:00:00.000Z',
         scannedAt: '2026-09-07T12:00:00.000Z',
@@ -895,6 +900,8 @@ describe('completeness at the Evidence boundary', () => {
         boundary.metadata(962).completeness,
       ).toEqual({
         commits: 'NOT_SCANNED',
+        /* Nothing was carried: this repository was never read. */
+        revalidatedBy: null,
         scannedSince: '2025-01-01T00:00:00.000Z',
         scannedAt: '2026-09-07T12:00:00.000Z',
         truncated: false,

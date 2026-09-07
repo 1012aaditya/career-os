@@ -20,6 +20,7 @@ import type {
   AccountObservation,
   ActivityObservation,
   CommitCompleteness,
+  LanguageObservation,
   RepositoryObservation,
   SyncObservation,
 } from './observations/types.js';
@@ -52,6 +53,26 @@ import type {
  */
 const DEFAULT_REPOSITORY_SCAN_BUDGET = 60;
 
+/*
+ * What a previous run established about one repository.
+ *
+ * Supplied by the sync service, which is the only layer that may read the
+ * database. This service stays DB-free so it remains a pure function of
+ * (GitHub responses, prior state) - which is what makes the incremental
+ * decision reproducible in a test without a database.
+ */
+export type PriorRepositoryState = {
+  externalId: string;
+  pushedAt: string | null;
+  defaultBranch: string | null;
+  scannedSince: string | null;
+  truncated: boolean;
+  commits: CommitCompleteness;
+  scannedAt: string;
+  activity: ActivityObservation;
+  languages: LanguageObservation[];
+};
+
 export type IngestionInput = {
   accessToken: string;
   account: AccountObservation;
@@ -59,12 +80,82 @@ export type IngestionInput = {
   scannedAt: string;
   scannedSince: string | null;
   repositoryScanBudget?: number;
+  /*
+   * Keyed by externalId - the row's own unique key - never by a field
+   * read back out of metadata JSON. Absent on a first sync.
+   */
+  priorRepositories?: ReadonlyMap<
+    string,
+    PriorRepositoryState
+  >;
 };
 
 type ActivityIndex = Map<
   string,
   { pullRequests: number; issues: number }
 >;
+
+/*
+ * May a previous run's commit count be carried instead of re-derived?
+ *
+ * Every clause below is load-bearing; none is belt-and-braces.
+ *
+ *   commits === 'DEFAULT_BRANCH_ONLY'
+ *     The stored count must itself be an observation. This ALSO closes a
+ *     trap that is not obvious: mergeNonObserving takes the repository
+ *     block from the INCOMING metadata, deliberately, so a rename is not
+ *     lost. That means a rate-limited run leaves a row holding a FRESH
+ *     pushedAt beside a STALE count. Comparing pushed_at alone would then
+ *     mark that repository unchanged forever and its commits would never
+ *     be counted again. The merge sets stored completeness to
+ *     NOT_SCANNED, and this clause is what reads that.
+ *
+ *   truncated === false
+ *     A count that hit the page ceiling is known to be short. Carrying it
+ *     would freeze it short permanently, because pushed_at will not move
+ *     on its behalf - and carrying truncated: true forward would force
+ *     PARTIAL on every future run with no path to repair.
+ *
+ *   scannedSince matches
+ *     The window is rendered into the evidence description. Carrying a
+ *     count gathered over one window under a different window's sentence
+ *     would state a falsehood.
+ *
+ *   defaultBranch matches, both non-null
+ *     Commits are read from the default branch. Renaming master to main,
+ *     or pointing it at a release branch, changes what is counted and
+ *     does NOT move pushed_at.
+ *
+ *   pushedAt equal, both non-null
+ *     Never on null === null. optionalInstant collapses absent, malformed
+ *     and genuinely-null into the same null, so a naive equality would
+ *     read "I have no idea" as "unchanged" - and if GitHub ever stopped
+ *     sending pushed_at, every repository on every account would compare
+ *     equal and the whole sync would silently stall forever. A
+ *     never-pushed repository is cheap to re-read; a silent global stall
+ *     is not recoverable.
+ */
+function canRevalidate(
+  prior: PriorRepositoryState | undefined,
+  shell: RepositoryObservation,
+  scannedSince: string | null,
+): boolean {
+  if (!prior) {
+    return false;
+  }
+
+  return (
+    prior.commits === 'DEFAULT_BRANCH_ONLY' &&
+    prior.truncated === false &&
+    prior.scannedSince === scannedSince &&
+    prior.defaultBranch !== null &&
+    shell.defaultBranch !== null &&
+    prior.defaultBranch === shell.defaultBranch &&
+    prior.pushedAt !== null &&
+    shell.pushedAt !== null &&
+    prior.pushedAt === shell.pushedAt
+  );
+}
 
 @Injectable()
 export class GithubIngestionService {
@@ -112,6 +203,7 @@ export class GithubIngestionService {
           scannedSince: input.scannedSince,
           scannedAt: input.scannedAt,
           truncated: false,
+          revalidatedBy: null,
         },
       });
 
@@ -181,6 +273,8 @@ export class GithubIngestionService {
       scannedAt: input.scannedAt,
       scannedSince: input.scannedSince,
       truncated: listing.truncated,
+      authoredActivityEstablished:
+        activityIndex !== null,
     });
   }
 
@@ -286,21 +380,73 @@ export class GithubIngestionService {
     const owner = shell.owner.login;
     const name = shell.name;
 
-    const languages = await this.rest.get(
-      `/repos/${encodeURIComponent(
-        owner,
-      )}/${encodeURIComponent(name)}/languages`,
-      {
-        accessToken: input.accessToken,
-        operation: 'repository_languages',
-      },
+    const prior = input.priorRepositories?.get(
+      shell.externalId,
     );
 
-    const commits = await this.fetchCommits(
-      input,
-      owner,
-      name,
+    const revalidated = canRevalidate(
+      prior,
+      shell,
+      input.scannedSince,
     );
+
+    /*
+     * A revalidated repository is not read at all - neither endpoint.
+     * That is the whole saving: the commit walk is paginated and can be
+     * ten requests on its own, and the languages call is another.
+     *
+     * The residual risk is narrow and stated rather than hidden. GitHub
+     * can recompute linguist classifications server-side without a push,
+     * so a revalidated repository's language breakdown may lag until its
+     * next push. A default-branch change - the other way languages can
+     * move without a push - is already excluded by canRevalidate, which
+     * compares defaultBranch. What remains is a byte-count drift, which
+     * is cosmetic beside the cost of re-reading every repository forever,
+     * and revalidatedBy: 'pushed_at' is what makes those rows findable if
+     * that judgement turns out to be wrong.
+     */
+    const languages = revalidated
+      ? null
+      : await this.rest.get(
+          `/repos/${encodeURIComponent(
+            owner,
+          )}/${encodeURIComponent(
+            name,
+          )}/languages`,
+          {
+            accessToken: input.accessToken,
+            operation: 'repository_languages',
+          },
+        );
+
+    /*
+     * The whole incremental saving. A repository whose last push has not
+     * moved cannot have gained or lost a commit on its default branch, so
+     * the previous count is carried rather than re-derived.
+     *
+     * It is a weaker signal than re-reading, and knowingly so: GitHub
+     * resolves commit authorship at READ time, so a user who adds an old
+     * verified email gains attributed commits with no push. That is why
+     * the carry is recorded as revalidatedBy: 'pushed_at' rather than
+     * passed off as a fresh observation.
+     */
+    const commits = revalidated
+      ? {
+          count:
+            prior!.activity.commitsAttributed,
+          completeness:
+            'DEFAULT_BRANCH_ONLY' as const,
+          truncated: false,
+          firstAt:
+            prior!.activity.firstActivityAt,
+          lastAt:
+            prior!.activity.lastActivityAt,
+        }
+      : await this.fetchCommits(
+          input,
+          owner,
+          name,
+        );
 
     const authored = activityIndex?.get(
       shell.repoId,
@@ -309,17 +455,31 @@ export class GithubIngestionService {
     const activity: ActivityObservation = {
       commitsAttributed: commits.count,
       /*
-       * null, not 0, when the authored-activity index could not be built.
-       * A repository genuinely absent from a working index did have zero,
-       * and that distinction is the whole point.
+       * Authored counts are taken fresh EVERY run, including for a
+       * revalidated repository, and are never carried forward.
+       *
+       * Authoring an issue or a pull request does not push code, so it
+       * does not move pushed_at - a revalidated repository is exactly
+       * where a stale authored count would hide. They come from one
+       * cross-repository call that runs regardless, so freshness here
+       * costs nothing.
+       *
+       * When that index could not be built we fall back to the last
+       * count that was established, and to null only if there has never
+       * been one. Never 0: a repository absent from a WORKING index did
+       * have zero, and that distinction is the whole point. Writing null
+       * over a known count would be the same erasure the persistence
+       * guard refuses for commits.
        */
       pullRequestsAuthored:
         activityIndex === null
-          ? null
+          ? (prior?.activity
+              .pullRequestsAuthored ?? null)
           : (authored?.pullRequests ?? 0),
       issuesAuthored:
         activityIndex === null
-          ? null
+          ? (prior?.activity.issuesAuthored ??
+            null)
           : (authored?.issues ?? 0),
       firstActivityAt: commits.firstAt,
       lastActivityAt: commits.lastAt,
@@ -328,20 +488,29 @@ export class GithubIngestionService {
     return {
       ...shell,
       /*
-       * A 304 leaves languages empty for this run rather than inventing
-       * them. 7.6 owns carrying a cached value forward; this phase only
-       * has to avoid asserting something it did not read.
+       * Read this run when we read it; otherwise carried from the last
+       * run that did.
+       *
+       * A 304 means "unchanged since your copy", so falling back to []
+       * would turn a cache hit into a claim that the repository has no
+       * languages - the same shape of error as reading "not scanned" as
+       * "no activity". The empty list is only correct when there was
+       * genuinely nothing before.
        */
       languages:
+        languages !== null &&
         languages.status === 'ok'
           ? normalizeLanguages(languages.body)
-          : [],
+          : (prior?.languages ?? []),
       activity,
       completeness: {
         commits: commits.completeness,
         scannedSince: input.scannedSince,
         scannedAt: input.scannedAt,
         truncated: commits.truncated,
+        revalidatedBy: revalidated
+          ? 'pushed_at'
+          : null,
       },
     };
   }
@@ -465,6 +634,7 @@ export class GithubIngestionService {
         scannedSince: input.scannedSince,
         scannedAt: input.scannedAt,
         truncated: false,
+        revalidatedBy: null,
       },
     };
   }

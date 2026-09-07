@@ -470,6 +470,14 @@ export function projectRepositoryEvidence(
       scannedSince:
         repo.completeness.scannedSince,
       scannedAt: repo.completeness.scannedAt,
+      /*
+       * How the count survived a run that did not re-derive it. null when
+       * it was read from GitHub this run. Recorded because the basis is
+       * falsifiable and the count is not - it is what makes it possible
+       * to find and re-derive every count resting on the weaker signal.
+       */
+      revalidatedBy:
+        repo.completeness.revalidatedBy,
       truncated: repo.completeness.truncated,
       reposScanned:
         sync.completeness.reposScanned,

@@ -388,6 +388,7 @@ export type SyncNormalizationInput = {
   scannedAt: string;
   scannedSince: string | null;
   truncated: boolean;
+  authoredActivityEstablished?: boolean;
 };
 
 export function buildSyncObservation(
@@ -423,6 +424,12 @@ export function buildSyncObservation(
     scannedAt: input.scannedAt,
     scannedSince: input.scannedSince,
     truncated: input.truncated,
+    /*
+     * Defaults to true so a caller that predates this field is not
+     * retroactively reported as incomplete.
+     */
+    authoredActivityEstablished:
+      input.authoredActivityEstablished ?? true,
   };
 
   return {
@@ -443,6 +450,7 @@ export function isCompleteScan(
   completeness: SyncCompleteness,
 ): boolean {
   return (
+    completeness.authoredActivityEstablished &&
     !completeness.truncated &&
     completeness.reposScanned >=
       completeness.reposTotal

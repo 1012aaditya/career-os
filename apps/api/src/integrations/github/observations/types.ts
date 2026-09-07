@@ -54,6 +54,27 @@ export type RepositoryCompleteness = {
   scannedAt: string;
   /** A pagination ceiling was reached, so counts are short of the truth. */
   truncated: boolean;
+  /*
+   * How a count survived a run that did not re-derive it.
+   *
+   * null means the count was established by reading GitHub in this run.
+   * 'pushed_at' means the repository's last-push timestamp was unchanged,
+   * so the previous count was carried forward rather than re-counted.
+   *
+   * Recorded because the basis is falsifiable and the count is not.
+   * GitHub resolves commit authorship at READ time, so a user who adds an
+   * old verified email has historical commits attributed to them with no
+   * push - the count moves while pushed_at does not. If that turns out to
+   * matter more than expected, this field is what makes it possible to
+   * find every count that rests on the weaker signal and re-derive it.
+   * Without it, revalidated rows are indistinguishable from freshly read
+   * ones and there is no way back.
+   *
+   * Deliberately NOT a fourth CommitCompleteness value: three consumers
+   * switch on that enum and the 7.0 contract fixes it at three. This says
+   * something orthogonal - not what was observed, but how it was carried.
+   */
+  revalidatedBy: 'pushed_at' | null;
 };
 
 /*
@@ -131,6 +152,17 @@ export type SyncCompleteness = {
   scannedSince: string | null;
   /** The repository listing itself hit a page ceiling. */
   truncated: boolean;
+  /*
+   * Whether the cross-repository authored-activity query succeeded.
+   *
+   * It runs once per sync and supplies every repository's pull-request
+   * and issue counts, so when it fails the run has a hole in it that no
+   * per-repository completeness value expresses - each repository was
+   * scanned, and yet part of its activity was never established. Without
+   * this flag such a run reports SUCCEEDED, which is exactly the class of
+   * false completeness the contract exists to prevent.
+   */
+  authoredActivityEstablished: boolean;
 };
 
 export type SyncObservation = {

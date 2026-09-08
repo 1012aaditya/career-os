@@ -194,15 +194,32 @@ export function projectSignals(
     for (const [skillId, mentioning] of numeratorBySkill) {
       prevalencePairsConsidered += 1;
 
+      const mentioningCompanies = countDistinct(
+        mentioning.map((posting) => posting.companyNormalized),
+      );
+
       /*
-       * The floor is applied to the DENOMINATOR and to the company count
-       * of the whole eligible set, not to the mentioning subset. Whether a
-       * statistic is publishable is a property of the sample it was drawn
-       * from, not of how the sample happened to answer.
+       * The floor guards BOTH company counts, and that is a correction.
+       *
+       * It previously guarded only the eligible cohort's company count
+       * while publishing the mentioning subset's - two different numbers.
+       * The consequence was measured on real data: 98 of 230 published
+       * prevalence rows carried distinctCompanyCount = 1, below the run's
+       * own recorded minDistinctCompanies of 2. So the rule "a row is
+       * written only if distinctCompanyCount >= minDistinctCompanies" was
+       * false of the very column it named, and a figure drawn from one
+       * employer was published as a market statistic.
+       *
+       * Guarding the cohort alone is not enough and guarding the subset
+       * alone is not either: the first decides whether the SAMPLE is broad
+       * enough to ask the question, the second whether the ANSWER rests on
+       * more than one employer. Both must hold, and now the published
+       * number is the one the floor checked.
        */
       if (
         eligible.length < floors.minDenominator ||
-        roleDistinctCompanies < floors.minDistinctCompanies
+        roleDistinctCompanies < floors.minDistinctCompanies ||
+        mentioningCompanies < floors.minDistinctCompanies
       ) {
         prevalencePairsSuppressed += 1;
         continue;
@@ -214,9 +231,7 @@ export function projectSignals(
         skillId,
         numeratorCount: mentioning.length,
         denominatorCount: eligible.length,
-        distinctCompanyCount: countDistinct(
-          mentioning.map((posting) => posting.companyNormalized),
-        ),
+        distinctCompanyCount: mentioningCompanies,
         distinctSourceCount: countDistinct(
           mentioning.map((posting) => posting.sourceId),
         ),

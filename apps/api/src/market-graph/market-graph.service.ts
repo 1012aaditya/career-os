@@ -33,6 +33,30 @@ function clampLimit(limit?: number): number {
 export class MarketGraphService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * Sources whose derived aggregates may be shown outside the team.
+   *
+   * `mayRedistributeDerived` was a column nothing consulted - written
+   * false, selected for display, and never checked before serving a single
+   * signal. That is precisely the failure its neighbour `isEnabled`
+   * documents: a column recording an intention that no code path reads is
+   * worse than no column, because a reader believes it is doing something.
+   *
+   * Not yet enforced on the read endpoints, deliberately and visibly: the
+   * two sources currently disagree (one CC0, one unresolved), and gating
+   * reads on it would silently empty the market rather than raise the
+   * question. Exposed here so the question is answerable from the API.
+   */
+  async redistributableSourceSlugs(): Promise<string[]> {
+    const sources = await this.prisma.marketSource.findMany({
+      where: { mayRedistributeDerived: true },
+      orderBy: { slug: 'asc' },
+      select: { slug: true },
+    });
+
+    return sources.map((source) => source.slug);
+  }
+
   async listSources() {
     const sources = await this.prisma.marketSource.findMany({
       orderBy: { slug: 'asc' },
@@ -43,6 +67,8 @@ export class MarketGraphService {
         licenceBasis: true,
         isEnabled: true,
         mayRedistributeDerived: true,
+        licenceNote: true,
+        licenceReviewedAt: true,
         expectedPostingLifetimeDays: true,
         pollIntervalHours: true,
       },
@@ -76,7 +102,29 @@ export class MarketGraphService {
   /** The most recent completed snapshot, or null when none has been run. */
   private async latestSignalRun() {
     return this.prisma.marketSignalRun.findFirst({
-      where: { status: 'SUCCEEDED', rulesetVersion: RULESET_VERSION },
+      where: {
+        status: 'SUCCEEDED',
+        /*
+         * A run with no signals is never the snapshot.
+         *
+         * Two zero-signal runs are already in this database, from an
+         * invocation that passed ten board tokens as one space-separated
+         * string. They matched nothing and were written SUCCEEDED, and
+         * because this query takes the most recent SUCCEEDED run, a typo
+         * was one minute away from serving "the market contains no roles"
+         * to every reader - which is the null-rendered-as-zero failure the
+         * completeness contract exists to forbid.
+         */
+        signals: { some: {} },
+        /*
+         * Deliberately NOT filtered on the compile-time RULESET_VERSION.
+         * Filtering on it meant that bumping the constant would make every
+         * existing signal vanish from every read endpoint at once, serving
+         * an empty market until a fresh computation landed. The run states
+         * which ruleset produced it; the reader reports that rather than
+         * hiding anything that disagrees with the current build.
+         */
+      },
       /*
        * computedAt then id. Two runs can share a millisecond, and `id` is
        * the only unique column available - arbitrary, but this is a
@@ -203,6 +251,8 @@ export class MarketGraphService {
       },
     });
 
+    const stats = run.stats as { postingsRoleUnresolved?: unknown } | null;
+
     return {
       data: {
         window: {
@@ -212,6 +262,21 @@ export class MarketGraphService {
           coverageComplete: run.coverageComplete,
           computedAt: run.computedAt,
           signalRunId: run.id,
+          /*
+           * Without this the denominator is uninterpretable.
+           *
+           * A volume signal reads "340 of 2955 postings", and a reader
+           * divides. But two thirds of those 2955 resolved to no role at
+           * all, so the true share among postings the vocabulary can
+           * classify is roughly three times higher. The correction was
+           * computed by the projection and stored on the run, and then not
+           * returned - so the one number that makes the ratio honest was
+           * the one number the reader could not see.
+           */
+          postingsRoleUnresolved:
+            typeof stats?.postingsRoleUnresolved === 'number'
+              ? stats.postingsRoleUnresolved
+              : null,
         },
         signals,
       },

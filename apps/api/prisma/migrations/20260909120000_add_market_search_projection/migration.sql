@@ -20,7 +20,11 @@
 --   sourcePublishedAt     the freshness filter's range bound AND the
 --                         first pagination tie-breaker, so it is read in
 --                         sorted order on every page
---   lastSeenAt            the freshness verdict's age input
+--   (no lastSeenAt index)  lastSeenAt is read only INSIDE the freshness
+--                         CASE, which is evaluated per candidate row and
+--                         never as a lookup - so an index on it was
+--                         created, measured at zero scans over the full
+--                         benchmark, and removed
 --   (sourceId, groupKey)  search-time grouping. Composite and in this
 --                         order because a groupKey is only meaningful
 --                         within its source - two sources may reuse a
@@ -28,10 +32,17 @@
 --   versionId             the detail lookup's join back to content
 --
 --   GIN searchTokens      free-text matching. GIN rather than btree
---   GIN titleTokens       because these are arrays and the query is
---   GIN locationTokens    containment (&&, @>), which btree cannot
---   GIN skillSlugs        answer. A LIKE '%term%' scan was the
---                         alternative and it cannot use an index at all.
+--   GIN locationTokens    because these are arrays and the query is
+--   GIN skillSlugs        containment (@>), which btree cannot answer. A
+--                         LIKE '%term%' scan was the alternative and it
+--                         cannot use an index at all.
+--
+--   (no titleTokens index) titleTokens is a ranking FACT, not a filter -
+--                         it appears in the SELECT and never in a WHERE,
+--                         so no query can ever use an index on it. Also
+--                         created, also measured at zero scans, also
+--                         removed. An index nobody can justify is an
+--                         index nobody dares delete later.
 --
 -- NO index on externalId even though it is the final tie-breaker: it is
 -- only ever read as the last key of an ordering the leading columns have
@@ -88,9 +99,6 @@ CREATE INDEX "MarketPostingSearchDocument_companyNormalized_idx" ON "MarketPosti
 CREATE INDEX "MarketPostingSearchDocument_sourcePublishedAt_idx" ON "MarketPostingSearchDocument"("sourcePublishedAt");
 
 -- CreateIndex
-CREATE INDEX "MarketPostingSearchDocument_lastSeenAt_idx" ON "MarketPostingSearchDocument"("lastSeenAt");
-
--- CreateIndex
 CREATE INDEX "MarketPostingSearchDocument_sourceId_groupKey_idx" ON "MarketPostingSearchDocument"("sourceId", "groupKey");
 
 -- CreateIndex
@@ -98,9 +106,6 @@ CREATE INDEX "MarketPostingSearchDocument_versionId_idx" ON "MarketPostingSearch
 
 -- CreateIndex
 CREATE INDEX "MarketPostingSearchDocument_searchTokens_idx" ON "MarketPostingSearchDocument" USING GIN ("searchTokens");
-
--- CreateIndex
-CREATE INDEX "MarketPostingSearchDocument_titleTokens_idx" ON "MarketPostingSearchDocument" USING GIN ("titleTokens");
 
 -- CreateIndex
 CREATE INDEX "MarketPostingSearchDocument_locationTokens_idx" ON "MarketPostingSearchDocument" USING GIN ("locationTokens");

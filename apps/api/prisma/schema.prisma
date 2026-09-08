@@ -1716,11 +1716,9 @@ model MarketPostingSearchDocument {
   @@index([roleSlug])
   @@index([companyNormalized])
   @@index([sourcePublishedAt])
-  @@index([lastSeenAt])
   @@index([sourceId, groupKey])
   @@index([versionId])
   @@index([searchTokens], type: Gin)
-  @@index([titleTokens], type: Gin)
   @@index([locationTokens], type: Gin)
   @@index([skillSlugs], type: Gin)
 }

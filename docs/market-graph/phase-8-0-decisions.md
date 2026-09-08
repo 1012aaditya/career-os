@@ -865,3 +865,278 @@ Known, reasoned about, and not fixed in Phase 8.
   it does not, a repost reads as a new posting with today's `firstSeenAt`.
 - Long-run version growth. The content-hash exclusions are reasoned from
   two same-day fetches, not from a week of observation.
+
+---
+
+## Phase 8.8 — hardening, and a second source
+
+Ten parallel reviews were run against the committed implementation: an
+audit, an adversarial critic, and one each for employer normalization,
+role normalization, source research, contract neutrality, determinism,
+provenance, security and test quality. Between them they found four
+defects that would have shipped, several claims in this document that the
+code did not support, and one class of bug that only a second source could
+ever have exposed. What follows is what changed, and what did not.
+
+### The four that would have shipped
+
+**A signal computation silently dropped three quarters of its input, and a
+different three quarters per machine.** `MAX_POSTINGS_PER_RUN` was named
+for postings and applied as `take` on the SIGHTING query. Sightings
+accumulate one row per posting per run, so at this source's own configured
+daily poll and the default thirty-day window, 2955 postings produce 88,650
+sightings — the ceiling binds on the seventh day. At day thirty the
+computation would have seen roughly 667 postings and reported
+`postingsInWindow: 667` as though that were the window, with
+`coverageComplete` still true. And because the query's leading sort key is
+`postingId`, a uuid minted per environment, dev, CI and production would
+each have dropped a *different* three quarters. That is precisely the
+machine-local ordering this document warns against, in the query those
+warnings annotate.
+
+Fixed by paging the walk to exhaustion instead of cutting it, and by
+throwing when a genuine posting ceiling is exceeded. A computation that
+cannot see all of its input must refuse to answer: an answer from a
+silently truncated sample is indistinguishable from a correct one.
+
+**One crashed computation bricked a scope permanently.** The migration
+adds a partial unique index allowing one RUNNING signal run per scope, and
+argues eight lines earlier — for the *ingestion* index — that "the
+constraint and the lease are one mechanism and neither is safe without the
+other". The signal run shipped with the constraint and without the lease.
+Any throw between opening the run and closing it left a RUNNING row that
+no later computation could get past, recoverable only by hand-written SQL.
+Fixed with the same thirty-minute reclaim the ingestion run has, plus a
+try/catch that fails the run.
+
+**A mistyped argument could become the published market.** Two runs in the
+database carried a single scope containing ten space-separated board
+tokens, matched nothing, and were written `SUCCEEDED` with zero signals.
+The read side takes the most recent `SUCCEEDED` run, so a typo was one
+minute away from serving "the market contains no roles" — the
+null-rendered-as-zero failure this contract exists to forbid. Fixed three
+ways: scopes are validated against the same shape the migration enforces
+on postings, a run that observed nothing is `FAILED` rather than
+`SUCCEEDED`, and a run with no signals can never be the snapshot.
+
+**Every P2002 recovery on the ingest path was dead code.** `PrismaService`
+uses the `PrismaPg` driver adapter, and under a driver adapter Prisma does
+not populate `meta.target` at all — it populates
+`meta.driverAdapterError.cause.constraint.index`. Verified against the
+live database: a duplicate slug yields `meta.target === undefined`. So the
+constraint check returned false for every P2002, and the sighting
+insert's "a retry of the same run is a no-op, which is what makes
+re-running a failed ingest safe" was in fact "a retry re-throws and kills
+the run". Unreachable with a source that returns each posting once per
+walk. Reachable on the first walk of a paginated one.
+
+### The publication floor guarded a different number than it published
+
+The rule stated in D8 — a prevalence row is written only if
+`distinctCompanyCount >= minDistinctCompanies` — was false of the very
+column it named. The floor was applied to the company count of the whole
+eligible cohort while the row published the company count of the
+*mentioning subset*. Measured: **196 published prevalence rows carried
+`distinctCompanyCount = 1`**, below the run's own recorded floor of 2.
+
+Worse, this document then cited one of those rows as evidence the control
+worked. Both statements cannot be true, and it was the rule that was
+wrong. The floor now guards both counts — the cohort decides whether the
+sample is broad enough to ask the question, the subset whether the answer
+rests on more than one employer — and after the fix the minimum published
+`distinctCompanyCount` is exactly 2 across 177 rows.
+
+### Two normalization bugs found by running it, not reading it
+
+**168 titles had their job word deleted.** `stripSeniority` matched the
+head *and* the tail, so any title ending in Director, Lead, Staff or
+Associate lost it: "Art Director" became "art", "Team Lead, ARC Software
+Engineering" became "team", "Sr. Director, Procure to Pay" became "sr.".
+Measured across 2955 live postings: 168 tail strips, of which exactly one
+resolved a role. It also scanned the token list in array order, so "Senior
+Director" stripped `director` purely because that entry precedes `senior`
+— which level word survived was decided by array position rather than by
+any rule. Stripping is now leading-only, repeats to a fixed point, and
+refuses a strip that would leave a dangling preposition.
+
+**Four employers folded into one.** `normalizeCompany` had no guard
+against stripping a name down to nothing, so "The Limited", "The Corp",
+"The Co" and "The Inc" all became "the". It was also non-idempotent, which
+meant the stored column could never safely be re-fed through the function
+and any future backfill was a trap. It now loops to a fixed point and
+refuses any removal that would not leave a name.
+
+Both changes alter what already-ingested postings are read to say, so
+`RULESET_VERSION` moved to 2 and the v1 normalizations were retained
+rather than rewritten.
+
+---
+
+## D11 — The second source is JobTech, and the licence is why
+
+**Decision.** The second source is the JobTech / Arbetsförmedlingen
+JobSearch API (Sweden).
+
+**Why.** It is the only source surveyed with an affirmative licence.
+Everything else is either silent or prohibitive: Adzuna names aggregation
+into vacancy counts in its prohibited list; Arbeitnow's terms limit use to
+"personal, non-commercial transitory viewing"; Himalayas bans commercial
+use in one clause and invites backfilling job boards in another;
+WeWorkRemotely's terms return 403 to every request, and a source whose
+terms cannot be read is not one to build a commercial product on. JobTech
+is **CC0** — a public-domain dedication, verified in the API's own
+`swagger.json` (`"license": { "name": "Ads are licensed under CC0" }`) and
+in Arbetsförmedlingen's open-data catalogue. Commercial use, durable
+storage and redistribution of derived aggregates are permitted outright.
+
+It is also shaped unlike the first source on almost every axis, which is
+what makes it a test of the abstraction rather than more of the same data:
+
+| | Greenhouse | JobTech |
+| --- | --- | --- |
+| discovery | per-company board token | national, queried |
+| pagination | none — whole board in one response | offset, with a hard server cap |
+| envelope | flat `{ jobs }` | `{ hits, total: { value } }` |
+| ids | JSON numbers | strings |
+| published | ISO with a numeric offset | naive ISO, **no offset at all** |
+| updated | ISO | epoch **milliseconds** |
+| expiry | null on all 864 sampled | populated on effectively every ad |
+| taxonomy | free-text departments | coded concept ids + SSYK |
+| employer id | a display string | an organisation number |
+
+**What this cost, stated plainly.**
+
+1. **CC0 does not clear GDPR, and this is the more important constraint.**
+   The dedication waives copyright and expressly disclaims privacy rights.
+   Swedish ads carry named individuals: measured on a live sample of 25
+   postings, **9 carried `application_contacts` holding 13 personal email
+   addresses and 13 mobile numbers**. The adapter therefore strips contact
+   details before the payload is stored — the one place in either adapter
+   where something is deliberately dropped rather than preserved, and a
+   deliberate override of the rule that raw observations are kept verbatim.
+   The employer, the role and the requirements survive; only the way to
+   phone a named recruiter is gone.
+2. **Sweden only, and only Platsbanken.** Roles posted solely on a company
+   site or LinkedIn are absent, so absence is not evidence of absence.
+   Descriptions are in Swedish, so the skill dictionary — built for English
+   prose — sees far less than it does on the first source.
+3. **The id is not promised stable.** It is documented nowhere as
+   permanent or non-reused. `MarketIdentityBasis` records `SOURCE_ID` as an
+   observed property, which is exactly why the basis is stored beside every
+   posting rather than assumed.
+4. **Three of five scopes cannot be read completely.** The offset cap is
+   2000 and the Data/IT field holds 2535 ads. That is not a defect; it is
+   the first time the pipeline has had to say so.
+
+### What the second source proved, and what it broke
+
+The canonical schema needed **no change at all** — no new column, no
+migration, no altered semantics. `RawPostingRecord` held every JobTech
+field. That half of the multi-source claim was already true.
+
+The *pipeline* was not. `MarketIngestionService` was a Greenhouse driver
+under a general name: it constructed the adapter as a field, took the
+concrete client in its constructor, exposed one method named after the
+source, hard-coded `'SOURCE_ID'` twice while both
+`MarketSource.identityBasis` and `SourceAdapter.identityBasis` existed and
+neither was read, imported one source's politeness delay as the pipeline's
+pacing, and matched one error class to classify every failure. The
+contract seam was real for parsing and absent for everything around it.
+
+Fixed by extending the contract to the fetch side — a `SourceClient` with
+`fetchScope(scope, cursor)`, `classifyFailure` and its own pacing, and a
+`SourceDescriptor` carrying the adapter, the client, the query parameters
+and the licence position. Sources are now declared in one registry file
+and nothing else names one. The seventh source is a directory and a
+registry entry.
+
+**The bug only a second source could expose:** `read` and
+`completeForScope` were two columns set from one boolean, and
+`deriveRunStatus` branched only on whether a scope was read. A paginated
+source that fetched page 1 of 40 on every scope would have reported
+`SUCCEEDED`. On the first live JobTech run, three of five scopes hit the
+offset cap — the run correctly reported `PARTIAL`, `scopesRead: 5`,
+`scopesComplete: 2`.
+
+---
+
+## Verified end to end on 2026-09-08, both sources
+
+```
+jobtech    5 scopes, 20 pages each on the three that hit the cap
+           6671 postings accepted, 0 rejected, 1 duplicate across pages
+           scopesRead 5, scopesComplete 2  ->  PARTIAL
+           signals 55, coverageComplete FALSE
+
+greenhouse 11 scopes requested, 10 read, 10 complete  ->  PARTIAL (one 404)
+           2955 postings, 2 created, 3 new versions, 2955 sightings
+           signals 158, coverageComplete TRUE
+```
+
+- **Both sources reach the same canonical graph.** `python` is observed in
+  both, and every observation retains its source and scope:
+  `greenhouse/databricks 334`, `jobtech/data-it 330`,
+  `greenhouse/anthropic 174`, `jobtech/teknik 94`. Nothing is collapsed.
+- **The coverage flags differ honestly.** Greenhouse's signals carry
+  `coverageComplete: true`; JobTech's carry `false`, because three of its
+  scopes were read but not read to the end.
+- **A paginated source really did return one posting twice**, and the
+  per-scope dedupe caught it — `duplicatesDropped: 1`. Per-page dedupe
+  would have missed it.
+- **Re-ingesting Greenhouse created 2 postings and 3 versions** out of
+  2955 — real drift at the source since the previous run, not churn.
+- Tests: **321 Market Graph tests**, up from 251. Full API suite **732
+  passing, 2 failing** — the same two pre-existing `auth.service.spec.ts`
+  failures on the base branch, unrelated to this phase.
+
+---
+
+## Accepted residuals, restated honestly
+
+Several claims in the sections above this one were found to overstate what
+was built. They are corrected here rather than quietly edited, because the
+overstatement is itself worth recording.
+
+- **Freshness is written and tested, and not delivered.**
+  `classifyFreshness` has zero production callers. Nothing computes
+  `lastCompleteCoverageAt`, no API response carries a verdict, and the two
+  `MarketSource` columns that exist to feed it are only ever echoed back.
+  D7 describes it in the present tense throughout; it should be read as a
+  design that is implemented at the unit level and not wired up.
+- **`explainSignal` shows an approximation of the contributing set.** It
+  filters by role, skill, ruleset and window, but not by the signal run's
+  scopes, not by prevalence eligibility, and not to the version the
+  computation actually selected. It returns nothing at all for
+  `ROLE_POSTING_VOLUME`. It is right on the current corpus by coincidence,
+  not by construction.
+- **`distinctCompanyCount` is a board count on the first source.**
+  Greenhouse's `company_name` is a board-level constant — one company per
+  board, always — so an employer running two board tokens counts as two
+  employers and clears the floor. JobTech's `organization_number` is a real
+  legal-entity id, so the second source is the first one where this number
+  means what it says.
+- **`mayRedistributeDerived` is recorded and surfaced but not enforced.**
+  No read endpoint checks it. Gating reads on it today would silently empty
+  the market for the source whose position is unresolved rather than raise
+  the question, so it is exposed instead of enforced — and named here so
+  the choice is visible.
+- **There is no purge path.** Raw payloads are retained permanently by
+  design, and sixteen `ON DELETE RESTRICT` foreign keys mean a manual
+  deletion actively fails unless six tables are cleared in order. There is
+  currently no mechanism to honour a takedown request. `DELETE FROM
+  "MarketPosting"` also still cascades to versions and sightings, so the
+  claim that RESTRICT makes payload retention "a property of the database"
+  holds for the run direction and not the posting direction.
+- **No historical recomputation has been exercised.** `compute` now takes
+  a `rulesetVersion`, so a v1 signal *can* be recomputed under v1 rules,
+  but nothing has done it and no test covers it.
+- **Cross-source deduplication is deliberately absent.** The same job on
+  two sources stays two observations. Counts are postings, never jobs, and
+  the API says so.
+- **Live rate limiting is still unobserved.** Neither source throttled.
+  Backoff is exercised only against scripted responses.
+- **The iOS simulator has still not been run**, for the same reason: the
+  Supabase credentials are deliberately not in this worktree.
+- **The tombstone feed is not modelled.** JobTech's stream emits removals
+  as a stub with no title; the adapter refuses and counts them. Recording a
+  delisting — which would give true posting lifespans — is unbuilt.

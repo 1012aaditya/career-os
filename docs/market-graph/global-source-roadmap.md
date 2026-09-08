@@ -184,6 +184,101 @@ one — it can be solved by asking, or by a bulk-file arrangement.
 
 ---
 
+## Asia-Pacific, LATAM, Middle East, Africa
+
+**Research in flight at the time of writing.** These four regions have no
+assessed sources and therefore **no coverage and no classification**. They
+are recorded here as open rather than omitted, because a roadmap that shows
+only the regions somebody happened to research would misrepresent the size
+of the gap.
+
+Prior expectation, stated so it can be checked against the result: the
+pattern across 67 assessed sources is that national employment services and
+government open-data portals are the only category that reliably licenses
+this use. The candidates most likely to clear the bar are therefore
+**MyCareersFuture Singapore**, **Korea's data.go.kr**, **Australia's
+data.gov.au**, **Brazil's dados.gov.br**, and **Colombia's Servicio Público
+de Empleo** — not SEEK, JobStreet, Bayt or Computrabajo.
+
+---
+
+## Partnership Targets
+
+Ranked by expected value, with the honest obstacle named for each.
+
+| Target | Why | The obstacle |
+|---|---|---|
+| **NLx Research Hub** (US) | The only door in North America that is actually a door. 50 states, 69M+ observations, live v3 API with ~80 fields, **field-level licensing enforced server-side** so a narrow grant is technically expressible | Commercial use is **not** currently an authorized use case. Applying buys queue position, not a key. DUA terms unpublished |
+| **Ashby / Workable partner feeds** | The only ATS route that solves the ownership problem, because the **employer** consents to syndication | Partner terms not public; requires business development, not engineering |
+| **DGE / Ministry of Labour (NCS, India)** | The only Indian body holding real vacancy rows, with a demonstrated MoU mechanism and 31 states already integrated | The ask is to change a **departmental negative-list classification**, not to obtain a file. And DGE cannot license out the third-party listings it received inbound |
+| **Info Edge (India) Ltd** | One negotiation plausibly covers seven properties including Naukri | They publish the JobSpeak index — you would be asking a competitor. Naukri's inclusion in the group template is inferred, not verified |
+| **Lightcast** | Best-in-class data: 2010+ history, Open Skills, LOT/SOC/O*NET on every posting | The AI/ML Terms bar generative-AI input with **5× liquidated damages** — disqualifying for this product unless specifically waived |
+| **Québec emploi** | 6,701 live bilingual postings, schema.org, same-day freshness | Québec copyright prohibits download and storage outright. A partner API host exists |
+| **Talent.com, Remotive, VDAB** | Real data behind a contract | Remotive's published floor is $5k/month; VDAB requires a signed cooperation agreement |
+
+**The pattern worth noticing:** every viable partnership is either a
+government body or an intermediary that has already collected employer
+consent. No pure aggregator is on this list, because aggregators cannot
+license what they do not own.
+
+---
+
+## Rejected Sources
+
+Rejected with quoted primary evidence. **These must not be implemented**,
+and the reason is recorded per source above so the question is not
+reopened a third time.
+
+| Source | The sentence that decided it |
+|---|---|
+| Adzuna | prohibits use "in aggregation (including but not limited to vacancy counts)" without written consent |
+| Indeed | §3.1(xvi) bars "benchmarking or competitive analysis"; §3.1(xi) bars building databases; Publisher API hosts do not resolve in DNS |
+| LinkedIn | API Terms §4.1: "must not capture, copy, cache, or store any Content" |
+| The Muse | 2025 ToU: access "solely for your personal and non-commercial purposes" |
+| Jooble | binding API Terms published at no reachable URL; 500 requests per key **per lifetime** |
+| SmartRecruiters | SAP API Policy prohibits "systematic and/or large-scale data extraction" |
+| Personio | Legal Notice on the feed's own host bars distribution without written consent |
+| Recruitee | T&C §2.4: "An End-User that is not the Subscriber does not derive any rights" |
+| Lever, Greenhouse | no third-party terms exist in either direction |
+| Wellfound | search-engine permission "excluding any caches or archives" |
+| Foundit | robots.txt names **ClaudeBot**, disallows `/jobs/` and `/search/` |
+| IndianAPI | own spec: data "scraped from all over the internet" |
+| Jobvetta | no legal entity named; operates a rights-holder takedown channel |
+| Arbeitnow, Himalayas, WeWorkRemotely | explicit non-commercial or anti-scraping terms |
+| Careerjet | requires the end-user's IP and user-agent per call — impossible for an unattended pipeline |
+| Bundesagentur für Arbeit | reverse-engineered endpoint; the agency responded by adding CAPTCHAs |
+| CareerOneStop | "COS data will not be modified or altered in any manner" |
+| Québec emploi *(as a build)* | copyright prohibits "download" and "store" of "data" and "compilations" |
+| API Setu | all 181 collections enumerated; zero vacancy APIs |
+
+---
+
+## Scraping-Only Sources
+
+**This section is deliberately empty of recommendations.**
+
+Several sources carry genuinely valuable data reachable only by means their
+terms prohibit — Naukri, Foundit, Instahyre, TimesJobs, Québec emploi, most
+ATS career sites, and every state job bank running on a closed vendor
+platform. They are classified NOT_FEASIBLE or PARTNERSHIP_REQUIRED, never
+SCRAPING_ONLY-and-build.
+
+Three things make this more than a policy statement:
+
+1. **Two properties now name Claude's crawler and refuse it on job paths** —
+   `foundit.in` and Info Edge's `ambitionbox.com`. Those are current,
+   deliberate, machine-readable refusals with nothing to interpret.
+2. **robots.txt is a floor on obligation, never a grant — in both
+   directions.** `freshersworld.com` explicitly *allows* ClaudeBot while its
+   terms independently forbid data mining. A permissive robots file is not
+   permission.
+3. **The contract risk survives the CFAA question.** hiQ won the CFAA point
+   against LinkedIn and still lost the case, with a $500,000 judgment and a
+   permanent injunction, on breach of contract. "Public data" is not a
+   defence to a terms violation.
+
+---
+
 ## Legal Risks
 
 1. **UNRESOLVED is treated as prohibited, and that is load-bearing.** Six

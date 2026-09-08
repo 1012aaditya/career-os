@@ -542,6 +542,105 @@ source.
 
 ---
 
+## North America
+
+### The aggregate problem became the biggest opportunity
+
+Five sources here are **BUILD_NOW**, licensed, free and unnegotiated — and
+**every one of them publishes aggregate statistics rather than postings**,
+so the contract cannot currently ingest any of them.
+
+| Source | Licence | What it gives |
+|---|---|---|
+| **Indeed Hiring Lab** | **CC BY 4.0** | Job-postings indices by 47 occupational sectors, US states, metros, CA provinces. Weekly. No auth, no key |
+| **BLS API** | **public domain** | JOLTS job openings, OEWS wages by SOC. 500 queries/day registered |
+| **StatCan WDS** | Open Licence — grants "use, reproduce, publish, freely distribute, **or sell**" | JVWS table 14-10-0444: vacancies + wages by 5-digit NOC × 83 geographies |
+| **NOC 2021** | OGL–Canada 2.0 | **44,038 alternate job titles**, bilingual |
+| **O*NET 31.0 bulk** | CC BY 4.0 | 44,779 titles, 8,753 software terms |
+
+That Indeed publishes its own posting statistics under CC BY 4.0 while its
+API terms prohibit building a competing product is worth noticing: the
+aggregate door is open at exactly the company whose posting door is
+bolted.
+
+**This changes the priority calculus.** The aggregate-ingestion contract
+extension is no longer a way to unlock four sources — it now unlocks at
+least seven across India, the Netherlands, Denmark, Austria, the US and
+Canada, several of them from tier-one statistical agencies.
+
+### NLx — the one real North American partnership target
+
+The **National Labor Exchange Research Hub** is the aggregation point every
+US state job bank feeds into, which is why the state-by-state search comes
+back empty.
+
+- Data-sharing agreements with **all 50 states**, DC, Guam, Puerto Rico, USVI
+- **69M+ observations** back to ~2010, refreshed daily, 350,000+ employers
+- A live, versioned v3 API with **~80 fields** per posting: employer
+  identity, FEIN, native O*NET and NAICS codes, structured salary, integer
+  `job_id`, ISO-8601 timestamps
+- **Field-level licensing enforced server-side** — `GET /license` returns
+  your permitted fields and you must echo them on every call, so a narrower
+  grant is technically expressible rather than all-or-nothing
+
+The honest position: commercial use is **not currently an authorized use
+case**. Their published list is state LMI efforts and discrete nonprofit
+research. Submitting a request buys queue position, not a key. But their
+form explicitly invites applications for *"product development, platform
+integration"*, and permits publishing *"aggregate statistics, derived data
+products, dashboards"* provided records stay unidentifiable — which is
+precisely this product's shape. **CareerOneStop now routes all new Jobs API
+requests to the same NLx board**, so this single relationship subsumes the
+other US government posting route.
+
+### Closed, and why it is structural rather than commercial
+
+**Indeed postings — NOT_FEASIBLE.** The Publisher API is not merely
+retired: `api.indeed.com` and `publisher.indeed.com` **do not resolve in
+DNS**. Nothing replaced it that reads — every documented partner API is
+write-side. And the Developer Agreement forecloses the use case
+independently: §3.1(xi) bars "scrape, build databases or otherwise create
+permanent copies", §3.1(xvi) bars use for "benchmarking or competitive
+analysis". Partner access would not help.
+
+**LinkedIn — NOT_FEASIBLE.** No programme at any tier returns job postings
+for third-party analytics; Premium Job Posting is write-only. API Terms
+§4.1 — "You must not capture, copy, cache, or store any Content" — is
+categorically incompatible with a statistics pipeline.
+
+**On *hiQ v. LinkedIn*, which is usually reported wrongly.** hiQ won the
+CFAA point on remand in April 2022 — and then **lost the case**. LinkedIn
+won summary judgment on breach of contract in November 2022, followed by a
+**$500,000 judgment and a permanent injunction** in December 2022 barring
+hiQ from scraping and requiring deletion of all LinkedIn data. Two
+takeaways: contract liability is the operative risk and survives regardless
+of whether data is public; and the case concerned **public member profiles,
+never job postings**. It authorises nothing here.
+
+**CareerOneStop — PARTNERSHIP_REQUIRED, and disqualifying anyway.** Its
+licence states "COS data will not be modified or altered in any manner",
+plus per-page dual attribution. Normalising postings into statistics is
+modification. Even granted, it cannot feed this pipeline.
+
+**US state portals — a comprehensive negative.** Seven state open-data
+portals queried; **zero job-posting datasets**. Some licences are
+excellent — New York's grants use "however you wish, in private sector
+projects" with no attribution requirement — but there is nothing to apply
+them to. The structural reason: states publish the labour-market
+*statistics* they own, while *postings* are licensed by employers into NLx
+and closed vendor platforms (WorkInTexas, IllinoisJobLink, and Washington's
+career site running on a private commercial domain no state open-data
+policy reaches).
+
+**Québec emploi — the cleanest "open ≠ licensed" case in the study.** An
+unauthenticated API, a permissive robots.txt, 6,701 live bilingual postings
+in schema.org JSON-LD with CAD currency — and a copyright notice
+prohibiting reproduction, download and storage of "documents, data,
+compilations". Every technical signal says yes; the licence says no. A
+partner API host exists, so it is PARTNERSHIP_REQUIRED rather than dead.
+
+---
+
 ## Geographic Coverage Gaps
 
 Coverage measured by what is **live and enabled today**, not by what is
@@ -618,6 +717,11 @@ Greenhouse and NAV implemented but disabled.
    of every non-English source already ingested, and costs less now than
    after more of them land.
 
+### TIER 1b — vocabulary, no negotiation, high leverage
+0b. **NOC 2021 elements** — OGL–Canada, **44,038 alternate job titles**,
+   bilingual. Pairs with O*NET's 44,779. Together roughly 89,000 titles
+   against a current vocabulary of 19 roles.
+
 ### TIER 2 — build after credentials
 3. **France Travail** — the largest addressable geographic gap. Needs a
    free self-serve OAuth2 registration. Obligations are real and shape the
@@ -662,10 +766,14 @@ source size:
    non-English source already ingested.
 3. **France Travail** (credentials + adapter, ~a week) — closes the largest
    geographic gap with a real labour market.
-4. **Aggregate ingestion contract extension** (a phase) — unlocks India,
-   the Netherlands, Denmark and Austria simultaneously. This is the highest
-   *ceiling* item and the highest *cost* item, and it must not be attempted
-   by pretending counts are postings.
+4. **Aggregate ingestion contract extension** (a phase) — the value of
+   this rose sharply once North America was surveyed. It now unlocks at
+   least **seven** licensed sources: data.gov.in, UWV, jobindsats, AMS
+   Austria, **Indeed Hiring Lab (CC BY 4.0)**, **BLS (public domain)** and
+   **StatCan JVWS**. Several are tier-one statistical agencies, and BLS
+   JOLTS is the natural validation series for the product's own counts.
+   Highest ceiling and highest cost, and it must not be attempted by
+   pretending counts are postings.
 5. **Partnership outreach** (business development, months) — Ashby/Workable
    first, DGE second.
 

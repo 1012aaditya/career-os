@@ -581,3 +581,867 @@ model ExternalSyncRun {
   @@index([connectionId, startedAt])
   @@index([userId])
 }
+
+/*
+ * ---------------------------------------------------------------------
+ * PHASE 8 - MARKET GRAPH
+ * ---------------------------------------------------------------------
+ *
+ * The Career Graph above answers "what does this person know and have
+ * evidence for". Everything below answers a different question - "what are
+ * employers currently advertising" - and the two must not be able to
+ * answer each other's.
+ *
+ * Advertising, deliberately, and not "demand". A posting is an
+ * advertisement: evergreen pipeline reqs, roles already filled internally,
+ * and one requisition advertised in three cities are all postings and none
+ * of them is an opening. Naming the thing we actually observe is what
+ * stops a demandIndex column growing here later.
+ *
+ * Every model here is additive and prefixed Market. Nothing above is
+ * altered: no column added, no constraint changed, no row read or
+ * rewritten. The prefix is load-bearing rather than cosmetic - it makes
+ * "did Phase 8 touch a frozen table?" answerable by grep instead of by
+ * review.
+ *
+ * NOTHING here has a foreign key into User, Skill, UserSkill, Experience,
+ * Project or Evidence. That absence IS the phase boundary between market
+ * observation and the Opportunity Engine, and a test fails if a relation
+ * ever appears. Market skills are deliberately not Career Graph Skill
+ * rows: Skill.normalizedName is globally unique across all users, its
+ * display name is permanently the first importer's spelling, and inserts
+ * take an index lock held to commit - so a background market ingest
+ * writing there would both serialise against live resume imports and
+ * silently edit users' career graphs.
+ *
+ * See docs/market-graph/phase-8-0-decisions.md.
+ */
+
+/// What a source supplies. A source that supplies a vocabulary is not a
+/// source that supplies observations, and a taxonomy pull must never
+/// invent postings to fit itself through the ingestion pipeline.
+enum MarketSourceKind {
+  JOB_BOARD
+  SKILL_TAXONOMY
+}
+
+/// On what basis we believe we may store and aggregate this source's data.
+///
+/// UNADDRESSED_PUBLIC_ENDPOINT is the honest description of a documented,
+/// unauthenticated, third-party-facing API with no terms of service
+/// governing it. It is NOT a grant, and recording it as its own value
+/// rather than as an absence keeps the distinction queryable instead of
+/// remembered. Adzuna is the counter-example that motivates the column:
+/// its terms name aggregation into vacancy counts in the prohibited list.
+enum MarketLicenceBasis {
+  UNADDRESSED_PUBLIC_ENDPOINT
+  EXPLICIT_GRANT
+  CONTRACTED
+}
+
+/// PARTIAL is not a failure - the same contract as ExternalSyncStatus. A
+/// run that read 3 of 10 boards succeeded at what it did and must not
+/// claim the other 7 were empty. Deliberately a separate enum: reusing
+/// ExternalSyncStatus would couple two lifecycles, and that one is frozen.
+enum MarketIngestionStatus {
+  RUNNING
+  SUCCEEDED
+  PARTIAL
+  FAILED
+}
+
+/// A computation either ran or it did not.
+///
+/// Separate from MarketIngestionStatus for the same reason that enum is
+/// separate from ExternalSyncStatus - and because PARTIAL has no meaning
+/// for a computation. Whether the DATA underneath was partial is a
+/// different question, answered by MarketSignalRun.coverageComplete.
+enum MarketComputationStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+/// How a posting's identity was derived. The basis is falsifiable even
+/// where the identity is not - the same reason Phase 7 records
+/// revalidatedBy. A source that supplies no stable id gets a weaker basis
+/// and its collision risk is documented at that point, not assumed away.
+enum MarketIdentityBasis {
+  SOURCE_ID
+  SOURCE_URL
+  CONTENT_FINGERPRINT
+}
+
+/// Whether the source gave us the whole posting body.
+///
+/// Load-bearing for denominators, not decoration. A truncated description
+/// systematically undercounts skills, so mixing truncated and full
+/// postings in one prevalence denominator produces a number that is about
+/// our fetch strategy rather than about the market.
+enum MarketDescriptionCompleteness {
+  FULL
+  TRUNCATED
+  ABSENT
+}
+
+/// NO_TEXT is not "no skills". It is the NOT_SCANNED rule applied to
+/// denominators: a posting we could not read is not a posting with no
+/// requirements, and it is excluded from the prevalence denominator
+/// rather than counted as a zero.
+enum MarketSkillExtractionStatus {
+  EXTRACTED
+  NO_TEXT
+  FAILED
+}
+
+/// Which deterministic path produced a mapping. All four are replayable
+/// from the alias table; none is a probability. UNMAPPED is a first-class
+/// retained outcome - an unrecognised term keeps its row so the raw term
+/// is never discarded, and the set of unmapped terms ranked by frequency
+/// is the curation backlog.
+enum MarketTermMatchMethod {
+  EXACT_CANONICAL
+  ALIAS
+  SOURCE_TAXONOMY
+  UNMAPPED
+}
+
+/// Where in the posting a term was found. A skill in a source's own
+/// structured taxonomy is a different quality of observation from one
+/// matched in prose, and without this field the two are silently averaged.
+enum MarketTermLocus {
+  TITLE
+  DESCRIPTION
+  SOURCE_TAXONOMY
+}
+
+/// Measurable statements only. There is deliberately no DEMAND_SCORE.
+enum MarketSignalType {
+  ROLE_POSTING_VOLUME
+  ROLE_SKILL_PREVALENCE
+}
+
+/// Whether cross-source duplicates were collapsed before counting.
+///
+/// An enum rather than free text because this is the field that decides
+/// whether a count may be called "jobs" or only "postings", and 'none'
+/// silently failing to equal 'NONE' would defeat every consumer guard.
+enum MarketDedupeMethod {
+  NONE
+}
+
+/// One external system we read market observations from.
+///
+/// One row per adapter FAMILY, not per company board. Greenhouse is one
+/// source; the board token is a sub-scope carried on each posting. The
+/// alternative - a source row per board - would make distinctSourceCount
+/// and distinctCompanyCount the same number and quietly destroy the only
+/// signal that tells a reader a "market" statistic came from one employer.
+model MarketSource {
+  id   String @id @default(uuid()) @db.Uuid
+  /// Authored, immutable, ASCII, and CHECK-constrained in the migration to
+  /// ^[a-z0-9][a-z0-9-]*$. Identity is scoped by this and never by `id`:
+  /// `id` is a uuid that differs between dev, CI and production, so a
+  /// derived posting id containing one would not be reproducible across
+  /// environments - the determinism tests would pass in-process and the
+  /// artifact would still be machine-local.
+  slug String @unique
+
+  displayName String
+  kind        MarketSourceKind    @default(JOB_BOARD)
+  /// The best identity this source can support. Changing it is an adapter
+  /// version bump, never a silent re-keying of existing rows.
+  identityBasis MarketIdentityBasis @default(SOURCE_ID)
+
+  licenceBasis MarketLicenceBasis
+  /// What was actually read, and when. Without these,
+  /// EXPLICIT_GRANT and CONTRACTED are assertions rather than findings.
+  licenceNote       String?
+  licenceReviewedAt DateTime?
+
+  /// Defaults to FALSE, and that is deliberate.
+  ///
+  /// The licence position is the one dimension Phase 8 admits is
+  /// unresolved, so the schema must not fail open on it. Enabling a source
+  /// is an explicit act by somebody who has looked, not a consequence of
+  /// inserting a row.
+  isEnabled Boolean @default(false)
+
+  /// Whether aggregates derived from this source may be shown outside the
+  /// team. Separate from isEnabled because ingesting for internal analysis
+  /// and publishing to users are different permissions, and a source may
+  /// well allow the first and not the second.
+  mayRedistributeDerived Boolean @default(false)
+
+  /// How long a posting on this source is expected to stay live. Feeds
+  /// freshness, which is DERIVED and never stored. The default of 30 days
+  /// is the modal auto-expiry on major ATS boards - defensible as board
+  /// behaviour, not as a measured market median. Every freshness verdict
+  /// RETURNS the basis it used, so a verdict resting on this guess is
+  /// identifiable at the point it is read.
+  expectedPostingLifetimeDays Int @default(30)
+  /// Feeds the FRESH threshold at two intervals, so one missed run does
+  /// not flip a healthy posting. A statement about our sampling, not about
+  /// the job market, which is why it needs no market evidence.
+  pollIntervalHours Int @default(24)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  runs          MarketIngestionRun[]
+  postings      MarketPosting[]
+  scopeCoverage MarketRunScopeCoverage[]
+}
+
+/// One row per ingestion attempt. The source-generic ledger, modelled on
+/// ExternalSyncRun - including the partial unique index that one lacks,
+/// and the stale-run lease that makes such an index safe to add.
+model MarketIngestionRun {
+  id       String                @id @default(uuid()) @db.Uuid
+  sourceId String                @db.Uuid
+  status   MarketIngestionStatus @default(RUNNING)
+
+  /// A monotonic, environment-independent ordinal.
+  ///
+  /// Exists because uuid primary keys cannot break a tie. Two sightings of
+  /// one posting can share an observedAt millisecond, and the only other
+  /// unique column available is a uuid4 - which is total but arbitrary and
+  /// DIFFERENT between dev, CI and production. Ordering by it would
+  /// reproduce, one layer down, exactly the defect that keeps `id` out of
+  /// derived posting identities.
+  runSeq Int @unique @default(autoincrement())
+
+  /// Stamped at open, immutable. A re-parse under a later adapter is then
+  /// a checkable difference rather than an invisible one.
+  adapterVersion Int
+  rulesetVersion Int
+
+  /// The exact request this run made, and its hash. Load-bearing: "62 of
+  /// 100 sampled postings" is meaningless unless what the sample was drawn
+  /// from is recorded. The fingerprint is what makes a sample reproducible
+  /// and what reveals that two runs believed comparable asked different
+  /// questions.
+  queryParams      Json
+  queryFingerprint String
+
+  startedAt  DateTime
+  finishedAt DateTime?
+  /// A short, already-sanitized code. Callers pass a reason, never a
+  /// caught error.
+  errorReason String?
+  /// A convenience summary. NOT the basis for the run's status - that is
+  /// derived from MarketRunScopeCoverage rows, because a status derived
+  /// from a caller-supplied block is only as good as the caller, and the
+  /// caller is the code most motivated to believe its run went well.
+  stats Json?
+
+  source        MarketSource            @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  scopeCoverage MarketRunScopeCoverage[]
+  sightings     MarketPostingSighting[]
+  versions      MarketPostingVersion[]
+
+  @@index([sourceId, startedAt])
+  @@index([queryFingerprint])
+}
+
+/// What one run actually covered, per scope. Append-only.
+///
+/// This table is why freshness can be derived without a sweeper.
+///
+/// The alternative was a lastCompleteCoverageAt column on every posting,
+/// which cannot work: the only code that touches a posting row is the
+/// ingest path, and the ingest path only touches postings it SAW. A
+/// posting that has disappeared from a board would never have the column
+/// advanced, so it would report "we cannot tell" forever and the states
+/// that exist to describe a closed job would be unreachable. Advancing it
+/// in bulk instead would mean rewriting rows nothing observed - the exact
+/// write churn that is the reason freshness is derived in the first place.
+///
+/// One ~50-byte row per run per scope answers it with neither: "was this
+/// scope completely read since we last saw that posting" is a MAX over
+/// this table.
+model MarketRunScopeCoverage {
+  runId       String @db.Uuid
+  sourceId    String @db.Uuid
+  sourceScope String
+
+  /// We intended to read it. Always true today; a source that discovers
+  /// its own scopes could record one it found but chose not to read.
+  requested Boolean @default(true)
+  /// The fetch completed and we know what is in this scope.
+  read Boolean
+  /// Everything in the scope was read, not just some pages of it.
+  ///
+  /// A 404 sets this false, NOT "read, zero postings". The 404 body is
+  /// byte-identical for a mistyped token, a renamed board and a genuinely
+  /// retired one, so reading it as "this employer has no jobs" would close
+  /// every posting on that board overnight on the strength of a typo.
+  /// Fails closed.
+  completeForScope Boolean
+
+  /// Short stable code. Never a caught error.
+  failureReason String?
+
+  postingsSeen      Int @default(0)
+  postingsAccepted  Int @default(0)
+  postingsRejected  Int @default(0)
+  duplicatesDropped Int @default(0)
+
+  finishedAt DateTime?
+
+  run    MarketIngestionRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+  source MarketSource       @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+
+  @@id([runId, sourceScope])
+  @@index([sourceId, sourceScope, completeForScope, finishedAt])
+}
+
+/// WHO a posting is. Identity only, plus the one fact about our own
+/// observation of it that is allowed to move.
+model MarketPosting {
+  id       String @id @default(uuid()) @db.Uuid
+  sourceId String @db.Uuid
+
+  /// Opaque. Compared and looked up, NEVER parsed - a scope may contain a
+  /// separator even where a slug may not, so parsing is ambiguous by
+  /// construction. Every component a query needs is also its own column.
+  ///
+  ///   market:<sourceSlug>:<basis>:<identityVersion>:<scope>/<externalKey>
+  ///
+  /// identityVersion is inside the string so that changing a derivation
+  /// produces a visible split rather than silently re-identifying
+  /// everything ingested afterwards.
+  externalId String @unique
+
+  identityBasis   MarketIdentityBasis
+  identityVersion Int
+  /// The source's own key, verbatim.
+  externalKey String
+  /// The sub-scope within the source this posting was found in: a board
+  /// token for an ATS, a country for an aggregator, '*' for a source with
+  /// no sub-scope. Part of identity, so a source's scope DEFINITION is
+  /// frozen at first ingest - changing it is an identityVersion bump with
+  /// an expected, labelled split, not a silent re-keying.
+  sourceScope String
+
+  /// The grouping the SOURCE itself asserts, where it asserts one.
+  ///
+  /// Greenhouse returns both a job-post id and a requisition id, and one
+  /// requisition advertised in three cities is three posts sharing one
+  /// requisition. Volume counts posts, so it overcounts openings. Storing
+  /// the key the source already gives us makes "posts or openings" a
+  /// choice a later phase can make; discarding it makes that choice
+  /// impossible without a re-fetch that will fail, because the source
+  /// deletes its postings.
+  externalGroupKey String?
+
+  /// Immutable. Appears in no update payload, so a re-observation can
+  /// never overwrite when we first saw this job.
+  firstSeenAt DateTime
+  /// Advances by GREATEST(old, new) only, and only when a sighting row is
+  /// actually inserted. Never advanced by a migration, a backfill or a
+  /// re-normalization - that is the whole anti-fabrication rule, and
+  /// Phase 7 has already been bitten by its violation.
+  lastSeenAt DateTime
+
+  /// Denormalized for cross-source work that Phase 8 deliberately does not
+  /// do. Stored now because a source deletes its postings and the future
+  /// job would otherwise need a re-fetch that can no longer succeed.
+  ///
+  /// NOT authoritative and never counted. companyNormalized here carries
+  /// no ruleset stamp, so it cannot answer "under which rules?"; every
+  /// count of distinct employers reads
+  /// MarketPostingNormalization.companyNormalized at the signal's own
+  /// ruleset version instead. This is a lookup accelerator, nothing more.
+  companyRaw        String?
+  companyNormalized String?
+  applyUrlCanonical String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  source    MarketSource            @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  versions  MarketPostingVersion[]
+  sightings MarketPostingSighting[]
+
+  @@index([sourceId, sourceScope])
+  @@index([sourceId, firstSeenAt])
+  @@index([sourceId, externalGroupKey])
+  @@index([companyNormalized])
+}
+
+/// WHAT a posting said. Immutable and content-addressed.
+///
+/// A re-fetch whose content hash matches creates no row here; an edited
+/// posting creates exactly one new one, and the old is retained so a
+/// signal computed last month still resolves to the text that produced it.
+model MarketPostingVersion {
+  id        String @id @default(uuid()) @db.Uuid
+  postingId String @db.Uuid
+
+  /// Which hashing rule produced contentHash.
+  ///
+  /// In the uniqueness key, so that fixing the entity decoder or changing
+  /// the hashed field list produces a LABELLED split rather than a
+  /// simultaneous phantom edit to every posting ever ingested.
+  contentHashVersion Int
+  /// Hash of the fields this system reads - NOT of the whole payload.
+  ///
+  /// The exclusion is the load-bearing part. Greenhouse varies its key set
+  /// between boards, so hashing the payload would mint a new version for
+  /// every posting on a board the day the vendor adds a field - recording
+  /// an API change as a market event, and degrading this table into one
+  /// row per fetch, which is the model it exists to avoid.
+  ///
+  /// sourceUpdatedAt is excluded for the same reason: an ATS bumps it when
+  /// a recruiter touches a req, with the advertised text byte-identical,
+  /// and a 20KB version per internal edit is not a record of the market.
+  /// The source's claim is kept per-observation on the sighting instead.
+  contentHash String
+
+  firstSeenRunId String   @db.Uuid
+  firstSeenAt    DateTime
+
+  titleRaw    String
+  companyRaw  String?
+  locationRaw String?
+  /// Verbatim, HTML and all. Never tidied - the cleaned form lives on the
+  /// normalization row, which is versioned and re-derivable. This is not.
+  descriptionRaw          String?
+  descriptionCompleteness MarketDescriptionCompleteness
+
+  /// The source's claims about time, never ours. Null means the source did
+  /// not say - never now(), never a sibling field. An invented date is
+  /// worse than an absent one.
+  sourcePublishedAt DateTime?
+  /// The source's claim AS OF THE OBSERVATION THAT FIRST PRODUCED THIS
+  /// CONTENT. It is not refreshed, because this row is immutable; the
+  /// current claim is on the latest sighting.
+  sourceUpdatedAt DateTime?
+  /// Would be the ideal freshness input - it is the employer's own stated
+  /// expiry rather than our guess. Greenhouse returned null for it on all
+  /// 864 postings sampled, so it is parsed and stored and NOTHING depends
+  /// on it being present.
+  sourceValidThrough DateTime?
+
+  applyUrlRaw String?
+  /// The source's own taxonomy labels, verbatim and unmapped.
+  ///
+  /// An array because the sources have arrays: Greenhouse returns
+  /// departments and offices, USAJOBS a coded category list. A singular
+  /// column could only be filled by picking element zero, which would make
+  /// the value depend on the source's array order - and that order is
+  /// explicitly not trusted anywhere else in this design. Ordered by the
+  /// adapter before storage, so it is stable under a reshuffle.
+  ///
+  /// These are NOT roles. "Engineering" is far coarser than a canonical
+  /// role and mapping it would collapse every discipline into one
+  /// denominator.
+  sourceCategoriesRaw String[]
+
+  /// The source's response for this posting, preserved. NOT NULL: without
+  /// it nothing is reproducible once the source deletes the posting, and a
+  /// nullable column makes that guarantee optional.
+  rawPayload     Json
+  rawPayloadHash String
+
+  createdAt DateTime @default(now())
+
+  posting        MarketPosting                @relation(fields: [postingId], references: [id], onDelete: Cascade)
+  firstSeenRun   MarketIngestionRun           @relation(fields: [firstSeenRunId], references: [id], onDelete: Restrict)
+  sightings      MarketPostingSighting[]
+  normalizations MarketPostingNormalization[]
+
+  @@unique([postingId, contentHashVersion, contentHash])
+  @@index([postingId])
+  @@index([firstSeenRunId])
+}
+
+/// THAT we saw it. Append-only, one narrow row per (run, posting, version).
+///
+/// This is the ledger that lets "we looked again" be recorded without
+/// touching anything that would fabricate freshness, and it is what signal
+/// windows filter on.
+model MarketPostingSighting {
+  runId     String @db.Uuid
+  postingId String @db.Uuid
+  versionId String @db.Uuid
+
+  /// When the response carrying this posting was received, on our clock.
+  /// Varies WITHIN a run - a walk over many boards spans minutes - which
+  /// is why it is not the same field as capturedAt.
+  observedAt DateTime
+  /// The run clock: identical on every row a run writes. The batch key,
+  /// and the field excluded from change detection.
+  capturedAt DateTime
+  /// Denormalized from the run so that (observedAt, runSeq) is a total
+  /// order over a posting's sightings without a join. Millisecond
+  /// timestamps tie; this is what breaks the tie reproducibly.
+  runSeq Int
+
+  /// What the source claimed about its own last update AT THIS
+  /// OBSERVATION. Deliberately here rather than only on the version:
+  /// excluding it from the content hash is what stops an internal ATS
+  /// touch minting a 20KB version, and keeping it here is what stops that
+  /// exclusion losing the information.
+  sourceUpdatedAt DateTime?
+
+  /// Where in the walk this arrived, so "first occurrence wins" dedupe is
+  /// reconstructible rather than merely asserted.
+  pageIndex   Int
+  indexInPage Int
+
+  createdAt DateTime @default(now())
+
+  run     MarketIngestionRun   @relation(fields: [runId], references: [id], onDelete: Restrict)
+  posting MarketPosting        @relation(fields: [postingId], references: [id], onDelete: Cascade)
+  version MarketPostingVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  /// versionId is in the key so that a paginated source which legitimately
+  /// returns one posting twice in a walk, with an edit between the two
+  /// pages, can record both. Keyed on (run, posting) alone, the second
+  /// insert would collide and the second version would exist with no
+  /// sighting - invisible to every signal, because windows filter on
+  /// sightings.
+  @@id([runId, postingId, versionId])
+  @@index([observedAt])
+  @@index([postingId, observedAt, runSeq])
+  @@index([versionId])
+}
+
+/// A canonical role in the MARKET vocabulary. Not a job title a user holds.
+///
+/// Opaque uuid primary key plus an authored, immutable, unique slug. The
+/// slug carries the determinism (derived artifacts reference it, not the
+/// uuid); the uuid carries the mutability, so a label can be corrected
+/// without a cascade rewrite of every row that ever referenced the role.
+///
+/// Slugs are hand-authored rather than generated because slugification is
+/// locale- and Unicode-dependent: 'C++' and 'C#' both collapse to 'c'
+/// under a naive strip, which would give two distinct entities one key.
+model MarketRole {
+  id    String @id @default(uuid()) @db.Uuid
+  slug  String @unique
+  label String
+
+  introducedInRulesetVersion Int
+  /// Roles are never deleted. A retired role keeps its id so historical
+  /// signals still resolve; new resolutions route elsewhere.
+  deprecatedAt   DateTime?
+  supersededById String?   @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  supersededBy MarketRole?  @relation("MarketRoleSupersession", fields: [supersededById], references: [id], onDelete: Restrict)
+  supersedes   MarketRole[] @relation("MarketRoleSupersession")
+
+  aliases        MarketRoleAlias[]
+  normalizations MarketPostingNormalization[]
+  signals        MarketSignal[]
+
+  @@index([supersededById])
+}
+
+/// A canonical skill in the MARKET vocabulary.
+///
+/// Deliberately NOT the Career Graph's Skill. That table is a user-facing
+/// vocabulary with a globally unique name and a first-writer-wins display
+/// string; this one holds a market vocabulary that has no business in a
+/// user's skill picker. Phase 9 links them with an explicit mapping table,
+/// never with a shared row.
+model MarketSkill {
+  id    String @id @default(uuid()) @db.Uuid
+  slug  String @unique
+  label String
+
+  introducedInRulesetVersion Int
+  deprecatedAt               DateTime?
+  supersededById             String?   @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  supersededBy MarketSkill?  @relation("MarketSkillSupersession", fields: [supersededById], references: [id], onDelete: Restrict)
+  supersedes   MarketSkill[] @relation("MarketSkillSupersession")
+
+  aliases  MarketSkillAlias[]
+  mentions MarketPostingSkillMention[]
+  signals  MarketSignal[]
+
+  @@index([supersededById])
+}
+
+/// The RULE: a normalized title resolves to a canonical role.
+///
+/// Curatable, keyed by ruleset version. Separate from the DECISION
+/// recorded on MarketPostingNormalization, which is frozen - so correcting
+/// a rule tomorrow does not retroactively change what we decided today.
+model MarketRoleAlias {
+  id             String @id @default(uuid()) @db.Uuid
+  rulesetVersion Int
+  /// The lookup key, already NFKC-folded and casefolded.
+  aliasNormalized String
+  roleId          String @db.Uuid
+
+  createdAt DateTime @default(now())
+
+  role           MarketRole                   @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  normalizations MarketPostingNormalization[]
+
+  /// An alias resolves to exactly one role within a ruleset. Ambiguity is
+  /// a curation decision made once here, never re-litigated per posting.
+  @@unique([rulesetVersion, aliasNormalized])
+  @@index([roleId])
+}
+
+/// The RULE: a normalized term resolves to a canonical skill.
+model MarketSkillAlias {
+  id              String @id @default(uuid()) @db.Uuid
+  rulesetVersion  Int
+  aliasNormalized String
+  skillId         String @db.Uuid
+
+  createdAt DateTime @default(now())
+
+  skill    MarketSkill                 @relation(fields: [skillId], references: [id], onDelete: Restrict)
+  mentions MarketPostingSkillMention[]
+
+  @@unique([rulesetVersion, aliasNormalized])
+  @@index([skillId])
+}
+
+/// What WE read a posting version to say, under one ruleset version.
+///
+/// Append-only and keyed by version, so re-normalizing under v2 writes new
+/// rows and a v1 signal stays reproducible and explainable. There is
+/// deliberately no "current" pointer: every read names its ruleset
+/// version, which dissolves the problem rather than solving it with a
+/// mutable flag.
+model MarketPostingNormalization {
+  id             String @id @default(uuid()) @db.Uuid
+  versionId      String @db.Uuid
+  rulesetVersion Int
+
+  titleNormalized String
+  /// Null means the title did not resolve. The posting is retained and
+  /// counted in the gap report; it is never dropped, and it is never
+  /// force-mapped to the nearest-looking role. A CHECK ties this to
+  /// roleMatchMethod, so "unmapped but has a role" is unrepresentable.
+  roleId          String?               @db.Uuid
+  roleMatchMethod MarketTermMatchMethod
+  roleAliasId     String?               @db.Uuid
+
+  /// The token the title parser removed from the head or tail - "senior",
+  /// "staff", "ii".
+  ///
+  /// Named for what it IS rather than for what we think it means. Calling
+  /// it seniority would assert that our classification of "II" is a fact
+  /// about the posting, and no source in scope asserts seniority at all.
+  /// The value is verbatim, so the evidence for a seniority ontology
+  /// accumulates without one being presumed.
+  titleModifierRaw String?
+
+  companyNormalized String?
+  /// Entity-unescaped, tag-stripped, whitespace-collapsed body text.
+  descriptionText String?
+
+  skillExtractionStatus MarketSkillExtractionStatus
+  /// canonicalHash of everything this row asserts, INCLUDING its skill
+  /// mentions in sorted order. Re-normalizing must reproduce it, and the
+  /// comparison is an explicit read-and-compare rather than a reliance on
+  /// the unique constraint: a unique violation says "a row exists", not
+  /// "the normalizer is deterministic", and mentions live in another table
+  /// where a hash over this row alone would never notice them.
+  outputHash String
+
+  normalizedAt DateTime
+
+  version   MarketPostingVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  role      MarketRole?          @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  roleAlias MarketRoleAlias?     @relation(fields: [roleAliasId], references: [id], onDelete: Restrict)
+
+  mentions MarketPostingSkillMention[]
+
+  @@unique([versionId, rulesetVersion])
+  /// The target of the mentions' composite foreign key, which is what
+  /// makes a mention keyed to a different ruleset than its own
+  /// normalization unrepresentable. Without it, a half-finished
+  /// re-normalization could put a mention in v2's numerator while its
+  /// posting sits in v1's denominator, and prevalence would exceed 100%
+  /// with nothing in the system able to notice.
+  @@unique([id, rulesetVersion])
+  @@index([rulesetVersion, roleId])
+  @@index([roleId])
+  @@index([roleAliasId])
+}
+
+/// The DECISION, frozen: this posting mentioned this raw term, and this is
+/// what we mapped it to and why.
+///
+/// This table is what answers "why did Shipaton map 'Postgres' to
+/// PostgreSQL?". rawTerm is NOT NULL and skillId IS nullable, so an
+/// unmapped term keeps its row rather than being discarded.
+///
+/// Honest scope of that guarantee: UNMAPPED here is reachable only from
+/// the SOURCE_TAXONOMY locus - a source that hands us an explicit skills
+/// array containing a term the dictionary does not know. It is NOT
+/// reachable from prose, because nothing in Phase 8 decides which words in
+/// a description were meant to be skills; extraction is dictionary
+/// matching, so a term we do not know is a term we never saw. Greenhouse
+/// supplies no skills array, so this column is null-free today and such
+/// rows will start appearing with the first source that has one.
+///
+/// The curation backlog that IS real in Phase 8 is the unresolved TITLE:
+/// MarketPostingNormalization.titleNormalized where roleId IS NULL,
+/// grouped and ranked. Discovering unknown skill terms in prose needs a
+/// candidate extractor that has deliberately not been built.
+model MarketPostingSkillMention {
+  id              String @id @default(uuid()) @db.Uuid
+  normalizationId String @db.Uuid
+  /// Always equal to the parent's, and enforced by a composite foreign key
+  /// rather than by convention. See the note on the parent's @@unique.
+  rulesetVersion Int
+
+  /// The exact source string. Never null, never tidied.
+  rawTerm        String
+  termNormalized String
+  /// Null = observed but unmapped. Not "no skill". A CHECK ties this to
+  /// matchMethod.
+  skillId String? @db.Uuid
+  aliasId String? @db.Uuid
+
+  matchMethod   MarketTermMatchMethod
+  extractedFrom MarketTermLocus
+
+  createdAt DateTime @default(now())
+
+  normalization MarketPostingNormalization @relation(fields: [normalizationId, rulesetVersion], references: [id, rulesetVersion], onDelete: Cascade)
+  skill         MarketSkill?               @relation(fields: [skillId], references: [id], onDelete: Restrict)
+  alias         MarketSkillAlias?          @relation(fields: [aliasId], references: [id], onDelete: Restrict)
+
+  /// One posting mentioning "Postgres" three times yields one row. There
+  /// is deliberately no occurrence count: a skill named ten times in a
+  /// verbose posting is not more required than one named once, and
+  /// counting occurrences would turn prose style into a market signal.
+  @@unique([normalizationId, termNormalized, extractedFrom])
+  @@index([skillId, rulesetVersion])
+  @@index([rulesetVersion])
+  @@index([aliasId])
+}
+
+/// One computation of the market graph. The identity of a snapshot.
+///
+/// Without this table "the market graph as of last Tuesday" is a fuzzy
+/// timestamp range instead of an id, and Phase 9 can cite a signal but not
+/// the snapshot it came from.
+model MarketSignalRun {
+  id     String                  @id @default(uuid()) @db.Uuid
+  status MarketComputationStatus @default(RUNNING)
+
+  rulesetVersion     Int
+  computationVersion Int
+
+  /// Half-open [start, end) in UTC, filtered on the sighting's observedAt.
+  /// Half-open so adjacent windows tile with no double count at the seam.
+  windowStart DateTime
+  windowEnd   DateTime
+
+  /// The scopes this run drew from, and their checksum.
+  ///
+  /// The list is stored, not just the key. A signal that carries only an
+  /// opaque hash cannot answer "which employers is this about?", which is
+  /// the single claim the honesty rule rests on - every signal is "the
+  /// market as covered by these employers", and that is unenforceable if
+  /// the employers are unrecoverable.
+  sourceScopeKey String
+  scopes         String[]
+
+  /// The publication floor. On the run rather than in code, so changing it
+  /// produces a new comparable snapshot instead of silently changing what
+  /// an existing number means.
+  minDenominator       Int
+  minDistinctCompanies Int
+
+  /// False when any run intersecting the window failed to completely cover
+  /// one of THIS run's scopes. Scoped, not global: a signal over
+  /// {vercel, stripe} must not be flagged because an unrelated board
+  /// 404'd, or the flag becomes noise nobody reads.
+  coverageComplete Boolean @default(false)
+
+  computedAt DateTime
+  finishedAt DateTime?
+  /// Exclusion and suppression counts, so the gap between what was
+  /// observed and what was published is visible.
+  stats Json?
+
+  signals MarketSignal[]
+
+  @@index([computedAt])
+  @@index([windowStart, windowEnd])
+}
+
+/// A measurable statement about what employers are advertising. Immutable
+/// and append-only: a recompute writes a new run and a fresh set of rows.
+///
+/// There is deliberately NO value, ratio, percent, score, weight or
+/// confidence column. The ratio is numeratorCount / denominatorCount,
+/// derived at read. Storing the float would detach the number from its
+/// sample - 3/7 and 429/1001 both round to 0.4286 and only one is a signal
+/// - and it is the exact surface on which an undefendable "demand score"
+/// grows.
+///
+/// This is also the role-skill relationship. There is no MarketRoleSkill
+/// edge table, because "Backend Engineer requires TypeScript" is not a
+/// fact anyone observed; it is a computed statement with a numerator, a
+/// denominator, a window and a ruleset version, and an edge table is that
+/// statement with its provenance thrown away.
+model MarketSignal {
+  id         String           @id @default(uuid()) @db.Uuid
+  runId      String           @db.Uuid
+  signalType MarketSignalType
+
+  roleId String @db.Uuid
+  /// Null for ROLE_POSTING_VOLUME. Postgres treats NULLs as DISTINCT, so
+  /// this column cannot appear in an @@unique - two partial unique indexes
+  /// are created in the migration instead.
+  skillId String? @db.Uuid
+
+  /// Both signal types carry a real denominator, and neither is trivially
+  /// equal to its numerator.
+  ///
+  /// ROLE_POSTING_VOLUME is postings resolved to this role over postings
+  /// that entered role resolution at all, so it reads as "share of
+  /// observed postings that were this role". Setting denominator equal to
+  /// numerator would make any generic renderer display every volume as
+  /// 100%, and would not roll up.
+  numeratorCount   Int
+  denominatorCount Int
+  /// How concentrated the sample is. Counts distinct
+  /// MarketPostingNormalization.companyNormalized at this run's ruleset
+  /// version - never the un-versioned copy on MarketPosting. 1 means this
+  /// is a statement about one employer, not about a market.
+  distinctCompanyCount Int
+  distinctSourceCount  Int
+
+  /// Copied from the run so a signal is self-describing when handed around
+  /// alone.
+  windowStart        DateTime
+  windowEnd          DateTime
+  rulesetVersion     Int
+  computationVersion Int
+  sourceScopeKey     String
+  /// NONE in Phase 8: cross-source postings are not collapsed, so these
+  /// count POSTINGS, never "jobs" or "openings".
+  dedupeMethod     MarketDedupeMethod
+  coverageComplete Boolean
+  computedAt       DateTime
+
+  run   MarketSignalRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  role  MarketRole      @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  skill MarketSkill?    @relation(fields: [skillId], references: [id], onDelete: Restrict)
+
+  @@index([runId, signalType])
+  @@index([roleId, signalType])
+  @@index([skillId])
+}

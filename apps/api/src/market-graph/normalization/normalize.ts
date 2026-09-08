@@ -81,37 +81,70 @@ export function tokenize(text: string): string[] {
   return matches.map(trimToken).filter((token) => token.length > 0);
 }
 
+/*
+ * Prepositions and conjunctions that must never begin a normalized title.
+ *
+ * A strip that leaves one behind has taken a word out of the middle of a
+ * phrase: "Director of Product Management" becoming "of product
+ * management" is not a title with a level removed, it is a fragment. The
+ * guard refuses the strip rather than repairing the output, because
+ * repairing it would silently turn that posting into a product manager.
+ */
+const PREPOSITION_HEAD = /^(of|for|in|to|at|on|the|and|&)\b/;
+
 /**
- * Strips a leading or trailing seniority word from a folded title.
+ * Removes level words from the FRONT of a title, and only the front.
  *
- * Returns the token that was removed, verbatim from the folded title, so
- * the information survives without a seniority ontology existing.
+ * Leading-only, and that single positional rule settles every hard case
+ * without a special rule for any of them. English job titles are
+ * head-final: the last content word of the head names the job and
+ * everything before it modifies. So a word that ENDS the head is the role,
+ * and the same word before another content word is a level.
  *
- * Only the head and tail are considered. "Engineer, Senior Platform" is
- * left alone rather than guessed at - a seniority word in the middle of a
- * title is usually qualifying something else.
+ * The previous version also matched the tail, and the cost was measured on
+ * real data: 168 titles had a level word taken off the end, and exactly
+ * ONE of them resolved a role as a result. "Art Director" became "art",
+ * "Team Lead, ARC Software Engineering" became "team", "Sr. Director,
+ * Procure to Pay" became "sr." - the job word deleted and the qualifier
+ * kept. It also iterated the token list in array order rather than by
+ * position, so "Senior Director" stripped `director` because that entry
+ * happens to precede `senior`: which level word survived was decided by
+ * array position rather than by any rule.
+ *
+ * Repeats until no leading token matches, so "Sr. Staff Software Engineer"
+ * loses both words rather than stopping after one.
  */
 export function stripSeniority(foldedTitle: string): {
   title: string;
   titleModifierRaw: string | null;
 } {
-  for (const token of SENIORITY_TOKENS) {
-    if (foldedTitle.startsWith(`${token} `)) {
-      return {
-        title: foldedTitle.slice(token.length + 1).trim(),
-        titleModifierRaw: token,
-      };
+  let title = foldedTitle;
+  let firstRemoved: string | null = null;
+
+  for (let pass = 0; pass < 4; pass += 1) {
+    const token = SENIORITY_TOKENS.find((candidate) =>
+      title.startsWith(`${candidate} `),
+    );
+
+    if (token === undefined) {
+      break;
     }
 
-    if (foldedTitle.endsWith(` ${token}`)) {
-      return {
-        title: foldedTitle.slice(0, -(token.length + 1)).trim(),
-        titleModifierRaw: token,
-      };
+    const remainder = title.slice(token.length + 1).trim();
+
+    /* Never strip to nothing, and never strip into a preposition. */
+    if (remainder.length === 0 || PREPOSITION_HEAD.test(remainder)) {
+      break;
+    }
+
+    title = remainder;
+
+    if (firstRemoved === null) {
+      firstRemoved = token;
     }
   }
 
-  return { title: foldedTitle, titleModifierRaw: null };
+  return { title, titleModifierRaw: firstRemoved };
 }
 
 /*
@@ -124,7 +157,7 @@ export function stripSeniority(foldedTitle: string): {
  * "front".
  */
 function titleHead(folded: string): string {
-  const cut = folded.split(/\s+[-–—]\s+|[,(/]/)[0] ?? folded;
+  const cut = folded.split(/\s+[-–—]\s+|[,(]/)[0] ?? folded;
 
   return cut.trim();
 }
@@ -291,35 +324,186 @@ export function extractSkillMentions(
  * "Stripe, Inc." are one employer for the purpose of counting how many
  * employers a signal rests on.
  */
-const LEGAL_SUFFIX =
-  /\s+(inc|llc|ltd|limited|corp|corporation|gmbh|bv|plc|sa|ag|pty|co)\.?$/;
+/*
+ * Legal-entity suffixes, longest first.
+ *
+ * Ordered explicitly rather than relying on the regex engine. With
+ * single-word entries and an end anchor, backtracking happens to pick the
+ * alternative that reaches the end - but that protection is incidental and
+ * does not survive the next multi-word entry: put "public limited company"
+ * and "company" in one alternation and a leftmost-first engine strips only
+ * "company", leaving "acme public limited".
+ */
+const LEGAL_SUFFIXES: readonly string[] = [
+  'public limited company',
+  'incorporated',
+  'corporation',
+  'limited',
+  'company',
+  'pty ltd',
+  'pte ltd',
+  'sarl',
+  'corp',
+  'gmbh',
+  'plc',
+  'llc',
+  'llp',
+  'ltd',
+  'inc',
+  'pty',
+  'pte',
+  'sas',
+  'spa',
+  'pbc',
+  'ab',
+  'ag',
+  'as',
+  'bv',
+  'co',
+  'kg',
+  'kk',
+  'lp',
+  'nv',
+  'oy',
+  'sa',
+];
 
+const SUFFIX_SET = new Set(LEGAL_SUFFIXES);
+
+/*
+ * Words that cannot, alone, be an employer. Used only by the guard below.
+ */
+const COMPANY_STOPWORDS = new Set(['the', 'a', 'an', 'and', 'of']);
+
+const TRAILING_SEPARATORS = /[\s.,;:\-\u2013\u2014/\\|&]+$/;
+const LEADING_SEPARATORS = /^[\s.,;:\-\u2013\u2014/\\|&]+/;
+
+/**
+ * Would removing this suffix leave something that is still a name?
+ *
+ * This guard is the core of the function, and it exists because the
+ * failure directions are not symmetric. Two rows for one employer is a
+ * count that is too high, printed beside a sample somebody can inspect.
+ * One row for two employers is a count that is too low, printed beside a
+ * sample that looks fine - and `distinctCompanyCount` is the number that
+ * reveals a single-employer sample, so deflating it silently disables the
+ * one honesty control the signal layer has.
+ *
+ * Without the guard, "The Limited", "The Corp", "The Co" and "The Inc" all
+ * folded to "the": four employers becoming one.
+ */
+function keepsAName(remainder: string): boolean {
+  return remainder
+    .split(' ')
+    .some(
+      (token) =>
+        token.length >= 2 &&
+        !SUFFIX_SET.has(token) &&
+        !COMPANY_STOPWORDS.has(token),
+    );
+}
+
+/**
+ * Folds an employer name to a comparison key.
+ *
+ * Normalizes a SPELLING. It may remove only decoration a writer put around
+ * a name they wrote; it may not assert that two names are the same legal
+ * entity. "Alphabet is Google" and "Acme (UK) is Acme" are entity
+ * resolution - they need a registry and a person on the record, and they
+ * belong in a mapping table where a wrong merge is a visible row somebody
+ * can delete, not in a regex whose output is a bare string.
+ */
 export function normalizeCompany(companyRaw: string | null): string | null {
   if (companyRaw === null) {
     return null;
   }
 
-  let folded = foldTerm(companyRaw);
-
   /*
-   * Trailing punctuation is stripped after EVERY suffix removal, not only
-   * before the first.
+   * One character substitution, and only one. The typographic apostrophes
+   * are the same authorial mark and NFKC does not unify them, so
+   * "Ben & Jerry's" and "Ben & Jerry’s" would otherwise be two employers
+   * that render near-identically in any listing - a split that hides from
+   * exactly the inspection that would catch it.
    *
-   * "Stripe, Inc." folds to "stripe, inc.", and removing the suffix leaves
-   * "stripe," - a trailing comma that makes it a different employer from
-   * "stripe" and quietly inflates every distinct-company count it appears
-   * in. Found by the spec beside this file, not by reading the code.
-   *
-   * Two passes because a name can carry two suffixes ("Acme Holdings Ltd
-   * Inc"). Bounded rather than looped to a fixed point, so a pathological
-   * input cannot spin here.
+   * Nothing else is substituted. Rewriting dashes, quotes or accents would
+   * each be an entity-identity claim wearing a typography fix, and
+   * transliterating "Nestlé" to "Nestle" merges two names a registry
+   * treats as distinct.
    */
-  for (let pass = 0; pass < 2; pass += 1) {
-    folded = folded.replace(/[.,\s]+$/, '');
-    folded = folded.replace(LEGAL_SUFFIX, '');
+  let folded = foldTerm(companyRaw)
+    .replace(/[\u2019\u2018\u02bc]/g, "'")
+    /*
+     * A comma with no space after it is ordinary human typing in a
+     * free-text field, and it defeated stripping completely: "ACME,LLC"
+     * kept an internal comma and could never fold with "ACME LLC". The
+     * space is inserted before the suffix scan and removed by the trailing
+     * trim afterwards, so it never reaches the output.
+     */
+    .replace(/,(?=\S)/g, ', ');
+
+  /* One balanced enclosing pair, not recursively: "(Acme)" but not "Acme (UK)". */
+  const wrapped = /^\((.*)\)$|^"(.*)"$|^'(.*)'$/.exec(folded);
+
+  if (wrapped) {
+    folded = (wrapped[1] ?? wrapped[2] ?? wrapped[3] ?? '').trim();
   }
 
-  folded = folded.replace(/[.,\s]+$/, '').trim();
+  /*
+   * Loop to a fixed point rather than a fixed number of passes.
+   *
+   * The previous two-pass version was not idempotent - f(f(x)) differed
+   * from f(x) for "Acme Holdings Ltd Inc Corp" - which meant the stored
+   * column could never safely be re-fed through this function, so any
+   * future backfill was a trap. How many suffixes a name can carry is not
+   * knowable, so it must not be a constant; the cap exists only so a
+   * pathological input cannot spin.
+   */
+  for (let pass = 0; pass < 4; pass += 1) {
+    folded = folded.replace(TRAILING_SEPARATORS, '');
+
+    const removed = LEGAL_SUFFIXES.find((suffix) => {
+      /*
+       * Matched against the tail as written AND against the tail with
+       * internal dots removed, so "s.a." folds onto the same entry as
+       * "sa" instead of leaving the residue "s.a" - a string no human
+       * ever wrote and which matches neither spelling.
+       */
+      const tail = folded.slice(-(suffix.length + 1));
+      const undotted = folded.replace(/\./g, '');
+      const undottedTail = undotted.slice(-(suffix.length + 1));
+
+      return (
+        tail === ` ${suffix}` ||
+        undottedTail === ` ${suffix}` ||
+        folded === suffix ||
+        undotted === suffix
+      );
+    });
+
+    if (removed === undefined) {
+      break;
+    }
+
+    const undotted = folded.replace(/\./g, '');
+    const base = folded.endsWith(` ${removed}`)
+      ? folded.slice(0, -(removed.length + 1))
+      : undotted.endsWith(` ${removed}`)
+        ? undotted.slice(0, -(removed.length + 1))
+        : '';
+
+    const candidate = base.replace(TRAILING_SEPARATORS, '');
+
+    if (!keepsAName(candidate)) {
+      break;
+    }
+
+    folded = candidate;
+  }
+
+  folded = folded
+    .replace(LEADING_SEPARATORS, '')
+    .replace(TRAILING_SEPARATORS, '')
+    .trim();
 
   return folded.length > 0 ? folded : null;
 }

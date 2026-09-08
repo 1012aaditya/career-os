@@ -17,7 +17,27 @@
  * and "C#" to "c" - which would give two distinct skills one identity.
  */
 
-export const RULESET_VERSION = 1;
+export const RULESET_VERSION = 2;
+
+/*
+ * v2 changed how titles and employer names are read. Every change is a
+ * correction, and every one alters what already-ingested postings are
+ * understood to say - so the version moves with them. A published number
+ * keeps meaning what it meant because it is stamped with the rules that
+ * produced it, and v1 normalizations are retained rather than rewritten.
+ *
+ *   - level words are stripped from the FRONT of a title only. Matching
+ *     the tail deleted the job word from 168 real titles ("Art Director"
+ *     became "art") and resolved a role in exactly one of them.
+ *   - the strip repeats, so "Sr. Staff Software Engineer" loses both.
+ *   - a strip that would leave a dangling preposition is refused, so
+ *     "Director of Product Management" stays whole instead of becoming
+ *     "of product management".
+ *   - employer folding loops to a fixed point and refuses any removal that
+ *     would not leave a name, so "The Limited" no longer folds to "the".
+ *   - "director of engineering" no longer resolves to engineering-manager;
+ *     a director and an engineering manager are not one role.
+ */
 
 export type CanonicalTerm = { slug: string; label: string };
 
@@ -48,6 +68,15 @@ export const ROLES: readonly CanonicalTerm[] = [
   { slug: 'product-manager', label: 'Product Manager' },
   { slug: 'product-designer', label: 'Product Designer' },
   { slug: 'solutions-engineer', label: 'Solutions Engineer' },
+  /*
+   * Added in v2 from the measured backlog: 45 and 31 real postings
+   * respectively, and neither fits an existing role. A technical program
+   * manager is not a product manager and not an engineering manager; a
+   * research engineer is not a machine-learning engineer. Mapping either
+   * to a neighbour would be a guess with a slug attached.
+   */
+  { slug: 'technical-program-manager', label: 'Technical Program Manager' },
+  { slug: 'research-engineer', label: 'Research Engineer' },
 ];
 
 /*
@@ -86,6 +115,7 @@ export const ROLE_ALIASES: Readonly<Record<string, string>> = {
   'software developer': 'software-engineer',
   'software development engineer': 'software-engineer',
   'member of technical staff': 'software-engineer',
+  'member of the technical staff': 'software-engineer',
   'systems engineer': 'software-engineer',
   'platform engineer': 'software-engineer',
 
@@ -133,11 +163,24 @@ export const ROLE_ALIASES: Readonly<Record<string, string>> = {
 
   'engineering manager': 'engineering-manager',
   'software engineering manager': 'engineering-manager',
-  'director of engineering': 'engineering-manager',
+  /*
+   * 'director of engineering' was here and was removed in v2. It asserted
+   * that a director and an engineering manager are one role - a level
+   * collapse, and exactly the kind of guess the no-fuzzy-fallback rule
+   * exists to prevent. It resolved 6 postings into an 83-posting bucket.
+   * Leadership titles now stay in the visible backlog, where a person can
+   * decide whether they are countable.
+   */
 
   'product manager': 'product-manager',
   'technical product manager': 'product-manager',
   'group product manager': 'product-manager',
+
+  'technical program manager': 'technical-program-manager',
+  'technical program management': 'technical-program-manager',
+  'program manager technical': 'technical-program-manager',
+
+  'research engineer': 'research-engineer',
 
   'product designer': 'product-designer',
   'ux designer': 'product-designer',
@@ -147,6 +190,9 @@ export const ROLE_ALIASES: Readonly<Record<string, string>> = {
   'solutions engineer': 'solutions-engineer',
   'sales engineer': 'solutions-engineer',
   'solutions architect': 'solutions-engineer',
+  'delivery solutions architect': 'solutions-engineer',
+  'specialist solutions architect': 'solutions-engineer',
+  'partner solutions architect': 'solutions-engineer',
   'forward deployed engineer': 'solutions-engineer',
   'customer engineer': 'solutions-engineer',
 };
@@ -165,6 +211,8 @@ export const ROLE_ALIASES: Readonly<Record<string, string>> = {
  */
 export const SENIORITY_TOKENS: readonly string[] = [
   'senior staff',
+  'sr. staff',
+  'sr staff',
   'entry level',
   'early career',
   'new grad',
@@ -173,6 +221,11 @@ export const SENIORITY_TOKENS: readonly string[] = [
   'director',
   'lead',
   'senior',
+  /*
+   * One employer's house style for an existing level, on 45 real postings.
+   * Must precede 'staff' or the plus is left stranded on the title.
+   */
+  'staff+',
   'staff',
   'junior',
   'intern',

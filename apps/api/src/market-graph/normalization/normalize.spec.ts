@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { canonicalJson } from '../../common/canonical-json.js';
 import type { RawPostingRecord } from '../sources/source-adapter.js';
+import { foldTerm } from '../observations/text.js';
 import {
   extractSkillMentions,
   normalizeCompany,
@@ -91,6 +92,10 @@ describe('skill extraction', () => {
   const negative: Array<[string, string]> = [
     ['Strong Java background', 'javascript'],
     ['JavaFX desktop work', 'javascript'],
+    /* The real substring trap here is `java`, not `javascript`. */
+    ['JavaFX desktop work', 'java'],
+    ['a JavaBeans codebase', 'java'],
+    ['reactive programming', 'react'],
     ['Postgres-compatible storage', 'postgresql'],
     ['R&D team', 'r'],
     ['Rust systems work', 'r'],
@@ -122,6 +127,22 @@ describe('skill extraction', () => {
       expect(SKILL_ALIASES[term]).toBeUndefined();
     },
   );
+
+  /*
+   * A property rather than examples. The negative table above documents
+   * specific traps, but most of its rows survive a substring matcher by
+   * accident of tokenization - only two of them actually fail if whole-
+   * token matching is replaced with `includes`. This one fails for every
+   * alias in the dictionary and cannot rot as the dictionary grows.
+   */
+  it('finds no alias buried inside a longer word', () => {
+    for (const alias of Object.keys(SKILL_ALIASES)) {
+      const buried = `zz${alias}zz`;
+      const found = extractSkillMentions(buried, 'DESCRIPTION');
+
+      expect(`${buried}: ${found.length}`).toBe(`${buried}: 0`);
+    }
+  });
 
   it('prefers the longest match, so React Native is not React', () => {
     const found = extractSkillMentions(
@@ -204,16 +225,170 @@ describe('title resolution', () => {
   });
 
   /*
-   * A regression test for a real bug found by running this against live
-   * data: stripping "director" as a modifier BEFORE looking the title up
-   * left "of engineering", so the alias for the whole phrase could never
-   * be reached and a genuine role silently joined the unmapped backlog.
+   * "Director of Engineering" no longer resolves, and that is the fix
+   * rather than a regression. Mapping it to engineering-manager asserted
+   * that a director and an engineering manager are one role - a level
+   * collapse, and the exact guess the no-fuzzy-fallback rule exists to
+   * prevent. What must hold is that the title survives INTACT and lands in
+   * the visible backlog rather than becoming a fragment.
    */
-  it('tries the whole title before stripping a modifier from it', () => {
+  it('leaves a leadership title unmapped, whole, and countable', () => {
     const result = normalizeTitle('Director of Engineering');
 
-    expect(result.roleSlug).toBe('engineering-manager');
+    expect(result.roleSlug).toBeNull();
+    expect(result.titleNormalized).toBe('director of engineering');
     expect(result.titleModifierRaw).toBeNull();
+  });
+
+  /*
+   * The fragment bug: stripping a leading modifier used to leave a
+   * dangling preposition. "of product management" can never match an
+   * alias and reads as nonsense in the backlog - and repairing the output
+   * rather than refusing the strip would have silently turned this posting
+   * into a product manager.
+   */
+  it('refuses a strip that would leave a dangling preposition', () => {
+    const result = normalizeTitle('Director of Product Management');
+
+    expect(result.titleNormalized).toBe('director of product management');
+    expect(result.titleModifierRaw).toBeNull();
+  });
+
+  /*
+   * Measured on 2955 live postings: 168 titles had a level word removed
+   * from the END, and exactly one of them resolved a role as a result.
+   * Each of these lost its actual job word.
+   */
+  it.each([
+    ['Art Director', 'art director'],
+    ['Creative Director, Copy', 'creative director'],
+    ['Team Lead, ARC Software Engineering Team', 'team lead'],
+    ['Chief of Staff, CRO', 'chief of staff'],
+    ['Operations Associate, Sanctions', 'operations associate'],
+    ['AWS GTM Partnership Lead', 'aws gtm partnership lead'],
+  ])('keeps the job word in %j', (title, normalized) => {
+    const result = normalizeTitle(title);
+
+    expect(result.titleNormalized).toBe(normalized);
+    expect(result.titleModifierRaw).toBeNull();
+  });
+
+  /*
+   * The token list used to be scanned in array order, so "Senior Director"
+   * stripped `director` purely because that entry precedes `senior`. Which
+   * level word survived was decided by array position rather than by a
+   * rule.
+   */
+  it('strips the leading level word, not whichever the list reaches first', () => {
+    expect(normalizeTitle('Senior Director, Alliance').titleModifierRaw).toBe(
+      'senior',
+    );
+  });
+
+  it.each([
+    ['Staff+ Software Engineer, Backend', 'software-engineer', 'staff+'],
+    ['Sr. Staff Software Engineer', 'software-engineer', 'sr. staff'],
+    ['Senior Software Engineer', 'software-engineer', 'senior'],
+    ['Technical Program Manager, Platform', 'technical-program-manager', null],
+    ['Research Engineer, Machine Learning', 'research-engineer', null],
+    ['Delivery Solutions Architect', 'solutions-engineer', null],
+    ['Member of the Technical Staff', 'software-engineer', null],
+    ['UI/UX Designer', 'product-designer', null],
+  ])('resolves %j to %s', (title, slug, modifier) => {
+    const result = normalizeTitle(title);
+
+    expect(result.roleSlug).toBe(slug);
+    expect(result.titleModifierRaw).toBe(modifier);
+  });
+
+  /*
+   * Roles that are genuinely different must never collapse into each
+   * other. Asserted as a partition, because an input/output table cannot
+   * express "these two must stay apart".
+   */
+  it('keeps distinct roles distinct', () => {
+    const pairs: Array<[string, string]> = [
+      ['Director of Engineering', 'Software Engineer'],
+      ['Director of Engineering', 'Engineering Manager'],
+      ['Engineering Manager', 'Software Engineer'],
+      ['Data Analyst', 'Data Scientist'],
+      ['Data Scientist', 'Data Engineer'],
+      ['Research Engineer', 'Software Engineer'],
+      ['Technical Program Manager', 'Product Manager'],
+      ['Technical Program Manager', 'Engineering Manager'],
+      ['Product Manager', 'Product Designer'],
+      ['Solutions Engineer', 'Software Engineer'],
+      ['Art Director', 'Director of Engineering'],
+      ['Chief of Staff', 'Staff Software Engineer'],
+      ['Head of Engineering', 'Engineering Manager'],
+      ['AWS GTM Partnership Lead', 'Lead Engineer'],
+    ];
+
+    for (const [left, right] of pairs) {
+      const a = normalizeTitle(left);
+      const b = normalizeTitle(right);
+
+      /*
+       * Distinct means: not the same resolved role, and where both are
+       * unmapped, not the same normalized string either.
+       */
+      const same =
+        a.roleSlug !== null && b.roleSlug !== null
+          ? a.roleSlug === b.roleSlug
+          : a.titleNormalized === b.titleNormalized;
+
+      expect(`${left} vs ${right}: ${same ? 'COLLAPSED' : 'distinct'}`).toBe(
+        `${left} vs ${right}: distinct`,
+      );
+    }
+  });
+
+  /*
+   * Two properties rather than examples, because they cannot rot. The
+   * second is what the 168 tail strips would have failed.
+   */
+  it('never produces a title that begins or ends with a preposition', () => {
+    const titles = [
+      'Director of Engineering',
+      'Head of Deal Desk - International',
+      'Chief of Staff, CRO',
+      'Member of the Technical Staff',
+      'Director of Product Management',
+      'VP of Engineering',
+    ];
+
+    for (const title of titles) {
+      const normalized = normalizeTitle(title).titleNormalized;
+
+      expect(`${title}: ${normalized}`).toBe(`${title}: ${normalized}`);
+      expect(/^(of|for|in|to|at|on|and)\b/.test(normalized)).toBe(false);
+      expect(/\b(of|for|in|to|at|on|and)$/.test(normalized)).toBe(false);
+    }
+  });
+
+  it('records a modifier only when the folded title starts with it', () => {
+    const titles = [
+      'Art Director',
+      'Creative Director, Copy',
+      'Senior Software Engineer',
+      'Staff+ Software Engineer',
+      'Team Lead, ARC Software Engineering Team',
+      'Sr. Director, Procure to Pay',
+      'Operations Associate',
+      'Software Engineering Intern',
+    ];
+
+    for (const title of titles) {
+      const result = normalizeTitle(title);
+
+      if (result.titleModifierRaw === null) {
+        continue;
+      }
+
+      expect(
+        `${title}: ${foldTerm(title).startsWith(result.titleModifierRaw)}`,
+      ).toBe(`${title}: true`);
+    }
   });
 
   it('leaves an unknown title unmapped rather than guessing a near role', () => {
@@ -228,6 +403,129 @@ describe('title resolution', () => {
 });
 
 describe('company folding', () => {
+  /*
+   * Asserted as a PARTITION, not a value table.
+   *
+   * The property that matters is which names fold together and which stay
+   * apart, and an input/output table cannot express the second. The
+   * direction of harm is asymmetric: two rows for one employer is a count
+   * that is too high beside a sample somebody can inspect; one row for two
+   * employers is a count that is too low beside a sample that looks fine -
+   * and distinctCompanyCount is the control that reveals a single-employer
+   * sample, so a silent merge disables it.
+   */
+  const foldTogether: Array<[string, string[]]> = [
+    [
+      'a recognised suffix, however it is punctuated',
+      [
+        'Stripe',
+        'Stripe Inc',
+        'Stripe Inc.',
+        'Stripe, Inc',
+        'Stripe, Inc.',
+        'Stripe,Inc.',
+        'Stripe, Incorporated',
+      ],
+    ],
+    ['long and short forms', ['Acme Ltd', 'Acme Limited', 'Acme, Ltd.']],
+    ['company and its abbreviation', ['Acme Co.', 'Acme Company', 'Acme']],
+    ['dotted and undotted', ['Acme S.A.', 'Acme SA', 'Acme, S.A.']],
+    ['dotted LLC', ['Acme L.L.C.', 'Acme LLC', 'ACME,LLC']],
+    ['stacked suffixes', ['Acme Holdings Ltd Inc', 'Acme Holdings']],
+    ['typographic apostrophes', ["Ben & Jerry's", 'Ben & Jerry\u2019s']],
+    ['case and whitespace', ['Scale AI', 'scale ai', '  SCALE   AI  ']],
+    ['an enclosing pair', ['(Acme)', 'Acme']],
+    ['unicode forms', ['Caf\u00e9 Inc', 'Cafe\u0301 Inc']],
+  ];
+
+  it.each(foldTogether)('folds %s together', (_label, variants) => {
+    const folded = new Set(variants.map((name) => normalizeCompany(name)));
+
+    expect(`${variants.join(' | ')} -> ${[...folded].join(' , ')}`).toBe(
+      `${variants.join(' | ')} -> ${normalizeCompany(variants[0]!)}`,
+    );
+  });
+
+  /*
+   * Each of these is a distinct employer. Any two of them folding together
+   * is a silent merge. "The Limited", "The Corp", "The Co" and "The Inc"
+   * all became "the" before the guard existed - four employers reported as
+   * one.
+   */
+  it('keeps suffix-shaped names apart from each other and from bare suffixes', () => {
+    const distinct = [
+      'The Limited',
+      'The Corp',
+      'The Co',
+      'The Inc',
+      'Limited Brands',
+      'Incorporated Ltd',
+      'Corp',
+      'Inc.',
+      'Co-op Group',
+      'Acme',
+      'Acme (UK)',
+      'Acme (US)',
+      'Nestl\u00e9',
+      'Nestle',
+      'Yahoo!',
+      'L.L. Bean',
+      '37signals',
+    ];
+
+    const folded = distinct.map((name) => normalizeCompany(name));
+
+    expect(new Set(folded).size).toBe(distinct.length);
+  });
+
+  /*
+   * The fixed two-pass loop was not idempotent, which meant the stored
+   * column could never safely be re-fed through this function and any
+   * future backfill was a trap.
+   */
+  it.each([
+    'Acme Holdings Ltd Inc',
+    'Acme Corp Ltd Inc LLC',
+    'Stripe, Inc.',
+    'The Limited',
+    'Societe Generale S.A.',
+  ])('is idempotent on %j', (name) => {
+    const once = normalizeCompany(name);
+
+    expect(normalizeCompany(once)).toBe(once);
+  });
+
+  it.each(['', '   ', ',', '...', '- ', '()'])(
+    'treats %j as no employer rather than an empty one',
+    (name) => {
+      expect(normalizeCompany(name)).toBeNull();
+    },
+  );
+
+  it('never returns an empty string or trailing punctuation', () => {
+    const names = [
+      'Inc.',
+      'Acme & Co',
+      'Acme - Inc',
+      'Yahoo! Inc.',
+      'Acme,',
+      'Corp',
+      'A Inc',
+    ];
+
+    for (const name of names) {
+      const folded = normalizeCompany(name);
+
+      if (folded === null) {
+        continue;
+      }
+
+      expect(`${name}: ${folded}`).toBe(`${name}: ${folded}`);
+      expect(folded.length).toBeGreaterThan(0);
+      expect(/[\s.,;:\-/\\|&]$/.test(folded)).toBe(false);
+    }
+  });
+
   it.each([
     ['Stripe', 'stripe'],
     ['Stripe, Inc.', 'stripe'],

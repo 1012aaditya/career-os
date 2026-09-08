@@ -1344,6 +1344,25 @@ conjunction, the latest-in-window rule, returning `[]` for volume again;
 and on the purge, tidying up "orphaned" vocabulary, leaving signals whose
 evidence was deleted, and attributing runs by scope name.
 
+## A correction found while auditing, not while building
+
+**Greenhouse was enabled by default, and both briefs forbade it.**
+`MarketSource.isEnabled` has a schema default of `false`, and the 8.8 work
+recorded that as fail-closed behaviour — but the registry descriptor set
+`isEnabled: true`, and `ensureSource` always supplies a value, so the
+default was never reached. Every fresh database got an enabled Greenhouse
+whose licence position is `UNADDRESSED_PUBLIC_ENDPOINT`. The comment beside
+it argued that setting the flag explicitly made enabling a source "an act
+somebody performed"; it did not, because the act was performed once, in
+code, for everyone.
+
+It is now `false`. `sync greenhouse` refuses until an operator flips the
+column by hand, `ensureSource`'s empty update block means that decision
+survives every later sync, and a new spec asserts that **no source whose
+licence position is unresolved is enabled** — the rule rather than the
+instance, so the next source cannot repeat it. Nothing tested this before;
+that is why it drifted.
+
 ## What is still not true
 
 - **`AGING` and `STALE` are fixture-verified only.** The whole corpus was

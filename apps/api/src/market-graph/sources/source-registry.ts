@@ -66,11 +66,23 @@ export class MarketSourceRegistry {
         'No terms of service governing the public Job Board API were found on 2026-09-08. Documented as public, unauthenticated and intended for third-party job boards, with no clause forbidding aggregation or requiring deletion. This is an unresolved position, not a grant.',
       licenceReviewedAt: new Date('2026-09-08T00:00:00.000Z'),
       /*
-       * Enabled explicitly against a schema default of false, so that
-       * turning a source on is an act somebody performed rather than a
-       * consequence of inserting a row.
+       * False, and it must stay false while the licence position is
+       * UNADDRESSED_PUBLIC_ENDPOINT.
+       *
+       * This read `true` until 8.9, with a comment arguing that setting it
+       * explicitly made enabling a source "an act somebody performed". It
+       * did not. The schema default of false was never reached, because
+       * ensureSource always supplies a value - so every fresh database got
+       * an enabled Greenhouse, and the fail-closed behaviour existed only
+       * in the column definition. An unresolved licence that ingests
+       * anyway is an unresolved licence being ignored.
+       *
+       * The consequence is intended: `sync greenhouse` refuses until an
+       * operator flips the column by hand. ensureSource's update block is
+       * empty, so that decision then survives every later sync - and so
+       * does a purge's decision to turn it back off.
        */
-      isEnabled: true,
+      isEnabled: false,
       /*
        * Left false, and the difference from JobTech below is deliberate.
        * Ingesting for internal analysis and publishing derived aggregates

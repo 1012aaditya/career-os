@@ -41,6 +41,14 @@ const EXPLAIN_SAMPLE_SIZE = 10;
  */
 const MAX_EXPLAIN_CANDIDATES = 50_000;
 
+/*
+ * How far back the snapshot search looks for a run belonging to a source
+ * a reader is allowed to see. Bounded so the query cannot degrade as run
+ * history grows; deep enough that a source not computed for months is
+ * still findable.
+ */
+const MAX_RUN_SCAN = 200;
+
 /** Matches the sighting walk in the computation this reconstructs. */
 const SIGHTING_PAGE_SIZE = 5_000;
 const DEFAULT_LIMIT = 50;
@@ -124,39 +132,80 @@ export class MarketGraphService {
   }
 
   /** The most recent completed snapshot, or null when none has been run. */
-  private async latestSignalRun() {
-    return this.prisma.marketSignalRun.findFirst({
-      where: {
-        status: 'SUCCEEDED',
-        /*
-         * A run with no signals is never the snapshot.
-         *
-         * Two zero-signal runs are already in this database, from an
-         * invocation that passed ten board tokens as one space-separated
-         * string. They matched nothing and were written SUCCEEDED, and
-         * because this query takes the most recent SUCCEEDED run, a typo
-         * was one minute away from serving "the market contains no roles"
-         * to every reader - which is the null-rendered-as-zero failure the
-         * completeness contract exists to forbid.
-         */
-        signals: { some: {} },
-        /*
-         * Deliberately NOT filtered on the compile-time RULESET_VERSION.
-         * Filtering on it meant that bumping the constant would make every
-         * existing signal vanish from every read endpoint at once, serving
-         * an empty market until a fresh computation landed. The run states
-         * which ruleset produced it; the reader reports that rather than
-         * hiding anything that disagrees with the current build.
-         */
+  /**
+   * The snapshot a reader is served, and WHOSE market it is.
+   *
+   * This took no source at all. It returned the globally most recent
+   * successful run, so "the market" was whichever CLI invocation finished
+   * last - and with two sources that was decided by 591 milliseconds. The
+   * consequence was live, not theoretical: for 51 minutes the API served
+   * derived aggregates computed from Greenhouse, whose descriptor says
+   * mayRedistributeDerived is false, purely because its run landed later.
+   * At seven sources it would have been a lottery over what "the market"
+   * means, re-rolled on every ingest.
+   *
+   * Two changes. The candidate set is restricted to sources permitted to
+   * have their derived aggregates shown - which is the enforcement
+   * mayRedistributeDerived was written for and never got; it had zero
+   * callers. And the chosen source is returned, so every response says
+   * whose market it describes rather than leaving a reader to assume it is
+   * everyone's.
+   *
+   * A caller may name a source instead. It is still one source's view -
+   * this phase has no cross-source aggregation and no cross-source
+   * dedupe, so a merged number would be a count of postings that might be
+   * the same job twice - but which one is now stated rather than raced
+   * for.
+   */
+  private async latestSignalRun(sourceSlug?: string) {
+    const sources = await this.prisma.marketSource.findMany({
+      where:
+        sourceSlug === undefined
+          ? { mayRedistributeDerived: true }
+          : { slug: sourceSlug },
+      orderBy: { slug: 'asc' },
+      select: {
+        slug: true,
+        displayName: true,
+        licenceBasis: true,
+        mayRedistributeDerived: true,
       },
+    });
+
+    if (sourceSlug !== undefined) {
+      const named = sources[0];
+
+      if (named === undefined) {
+        throw new NotFoundException(`Unknown market source: ${sourceSlug}`);
+      }
+
       /*
-       * computedAt then id. Two runs can share a millisecond, and `id` is
-       * the only unique column available - arbitrary, but this is a
-       * "which one do we show" tiebreak rather than anything a stored
-       * number depends on, so an arbitrary total order is sufficient here
-       * where it would not be inside a computation.
+       * Refused rather than served. A licence that permits ingestion for
+       * internal analysis and a licence that permits showing derived
+       * aggregates to a reader are different permissions, and only the
+       * second one is being exercised here.
        */
+      if (!named.mayRedistributeDerived) {
+        throw new ConflictException(
+          `Source ${sourceSlug} may not have derived aggregates redistributed`,
+        );
+      }
+    }
+
+    if (sources.length === 0) {
+      return null;
+    }
+
+    /*
+     * MarketSignalRun records no source - only sourceScopeKey, which is
+     * canonicalHash({source, scopes}) and one-way. So candidates are
+     * walked most-recent-first and each is attributed by recomputing that
+     * key, which is deterministic and bounded by the scan below.
+     */
+    const candidates = await this.prisma.marketSignalRun.findMany({
+      where: { status: 'SUCCEEDED', signals: { some: {} } },
       orderBy: [{ computedAt: 'desc' }, { id: 'desc' }],
+      take: MAX_RUN_SCAN,
       select: {
         id: true,
         windowStart: true,
@@ -172,10 +221,25 @@ export class MarketGraphService {
         stats: true,
       },
     });
+
+    for (const run of candidates) {
+      const owner = sources.find(
+        (source) =>
+          canonicalHash({ source: source.slug, scopes: run.scopes }) ===
+          run.sourceScopeKey,
+      );
+
+      if (owner !== undefined) {
+        return { ...run, source: owner };
+      }
+    }
+
+    return null;
   }
 
-  async latestSnapshot() {
-    const run = await this.latestSignalRun();
+
+  async latestSnapshot(sourceSlug?: string) {
+    const run = await this.latestSignalRun(sourceSlug);
 
     return { data: run };
   }
@@ -186,7 +250,7 @@ export class MarketGraphService {
    * Returns counts, never a percentage. The caller divides where the
    * denominator is still visible next to the number.
    */
-  async roleSkills(roleSlug: string, limit?: number) {
+  async roleSkills(roleSlug: string, limit?: number, sourceSlug?: string) {
     const role = await this.prisma.marketRole.findUnique({
       where: { slug: roleSlug },
       select: { id: true, slug: true, label: true },
@@ -196,7 +260,7 @@ export class MarketGraphService {
       throw new NotFoundException('Unknown market role');
     }
 
-    const run = await this.latestSignalRun();
+    const run = await this.latestSignalRun(sourceSlug);
 
     if (run === null) {
       return { data: { role, window: null, signals: [] } };
@@ -245,6 +309,13 @@ export class MarketGraphService {
           minDistinctCompanies: run.minDistinctCompanies,
           computedAt: run.computedAt,
           signalRunId: run.id,
+          /*
+           * Whose market this is. Every signal in this phase is "the market
+           * as covered by these employers, on this source" - the honesty
+           * rule the schema states - and until now the two read endpoints a
+           * reader actually hits named the employers and not the source.
+           */
+          source: run.source,
         },
         signals,
       },
@@ -252,8 +323,8 @@ export class MarketGraphService {
   }
 
   /** Role volumes for the latest snapshot, largest first. */
-  async roleVolumes(limit?: number) {
-    const run = await this.latestSignalRun();
+  async roleVolumes(limit?: number, sourceSlug?: string) {
+    const run = await this.latestSignalRun(sourceSlug);
 
     if (run === null) {
       return { data: { window: null, signals: [] } };
@@ -286,6 +357,7 @@ export class MarketGraphService {
           coverageComplete: run.coverageComplete,
           computedAt: run.computedAt,
           signalRunId: run.id,
+          source: run.source,
           /*
            * Without this the denominator is uninterpretable.
            *

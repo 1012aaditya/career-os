@@ -53,19 +53,34 @@ export class MarketGraphController {
     return this.marketGraph.listSkills(parseLimit(limit));
   }
 
+  /*
+   * `source` names whose market to read. It is optional and there is no
+   * hidden default: absent, the service picks the most recent run among
+   * sources whose licence permits their derived aggregates to be shown,
+   * and RETURNS which one it picked. Before this, the answer was whichever
+   * source's computation finished last - 591 milliseconds apart, with two
+   * sources - and the response never said which.
+   */
   @Get('snapshot')
-  latestSnapshot() {
-    return this.marketGraph.latestSnapshot();
+  latestSnapshot(@Query('source') source?: string) {
+    return this.marketGraph.latestSnapshot(source);
   }
 
   @Get('roles/:slug/skills')
-  roleSkills(@Param('slug') slug: string, @Query('limit') limit?: string) {
-    return this.marketGraph.roleSkills(slug, parseLimit(limit));
+  roleSkills(
+    @Param('slug') slug: string,
+    @Query('limit') limit?: string,
+    @Query('source') source?: string,
+  ) {
+    return this.marketGraph.roleSkills(slug, parseLimit(limit), source);
   }
 
   @Get('signals')
-  roleVolumes(@Query('limit') limit?: string) {
-    return this.marketGraph.roleVolumes(parseLimit(limit));
+  roleVolumes(
+    @Query('limit') limit?: string,
+    @Query('source') source?: string,
+  ) {
+    return this.marketGraph.roleVolumes(parseLimit(limit), source);
   }
 
   @Get('signals/:id')

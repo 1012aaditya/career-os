@@ -129,6 +129,16 @@ export function MarketScreen() {
           </Card>
         ) : (
           <Card>
+            {/*
+             * The source, first and unabbreviated.
+             *
+             * Without it this card said "127 employer boards" and left the
+             * reader to assume that meant the job market. It means one
+             * source's view of it - and which source was, until the API
+             * started returning this, decided by whichever ingestion run
+             * happened to finish last.
+             */}
+            <AppText variant="caption">{window.source.displayName}</AppText>
             <AppText variant="caption" muted>
               {`${window.scopes.length} employer boards · ${new Date(
                 window.start,

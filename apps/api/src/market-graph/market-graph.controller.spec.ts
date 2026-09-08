@@ -229,7 +229,7 @@ describe('the controller stays thin', () => {
       .set('Authorization', 'Bearer valid-token')
       .expect(200);
 
-    expect(service.roleVolumes).toHaveBeenCalledWith(5);
+    expect(service.roleVolumes).toHaveBeenCalledWith(5, undefined);
   });
 
   it.each(['abc', '0', '-1', '2.5', ''])(
@@ -281,5 +281,62 @@ describe('what a market response may contain', () => {
       .expect(200);
 
     expect(JSON.stringify(response.body)).toContain(USER_A);
+  });
+});
+
+describe('naming the source a snapshot describes', () => {
+  /*
+   * The market is not one thing. Every signal is "the market as covered by
+   * these employers, on this source", and the endpoint that served it
+   * previously picked whichever source computed last - by 591 milliseconds
+   * with two sources loaded - and said nothing about which.
+   */
+  it('passes a requested source through to the service', async () => {
+    const service = stubService();
+    app = await createApp(service);
+
+    await request(app.getHttpServer())
+      .get('/v1/market/signals?limit=5&source=jobtech')
+      .set('Authorization', 'Bearer valid-token')
+      .expect(200);
+
+    expect(service.roleVolumes).toHaveBeenCalledWith(5, 'jobtech');
+  });
+
+  it('asks for no source when the caller named none, rather than guessing one', async () => {
+    const service = stubService();
+    app = await createApp(service);
+
+    await request(app.getHttpServer())
+      .get('/v1/market/snapshot')
+      .set('Authorization', 'Bearer valid-token')
+      .expect(200);
+
+    expect(service.latestSnapshot).toHaveBeenCalledWith(undefined);
+  });
+
+  /*
+   * A mistyped slug must reach the service verbatim so the service can
+   * refuse it. Silently dropping it would fall back to "some source" and
+   * reintroduce exactly the ambiguity this parameter exists to remove -
+   * the reader would ask for one market and be served another with no
+   * error. (The global pipe's forbidNonWhitelisted governs validated DTO
+   * payloads, not bare query params, so an unknown parameter NAME is
+   * ignored rather than rejected; the pinned route table is what bounds
+   * this surface.)
+   */
+  it('forwards an unknown source verbatim, so the service can refuse it', async () => {
+    const service = stubService();
+    app = await createApp(service);
+
+    await request(app.getHttpServer())
+      .get('/v1/market/signals?source=no-such-source')
+      .set('Authorization', 'Bearer valid-token')
+      .expect(200);
+
+    expect(service.roleVolumes).toHaveBeenCalledWith(
+      undefined,
+      'no-such-source',
+    );
   });
 });

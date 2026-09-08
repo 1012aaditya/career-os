@@ -10,6 +10,23 @@ import { apiRequest } from '../api/client';
  * reader needs to judge it, and there is no way to get it back.
  */
 
+/**
+ * Which source a snapshot describes.
+ *
+ * Present because the market is not one thing. Every number the API
+ * returns is "the market as covered by these employers, on this source",
+ * and the endpoint used to pick whichever source's computation finished
+ * last without saying which - so the screen could show a Swedish public
+ * job bank one minute and a set of US startup boards the next, with no
+ * visible difference.
+ */
+export type MarketSource = {
+  slug: string;
+  displayName: string;
+  licenceBasis: string;
+  mayRedistributeDerived: boolean;
+};
+
 export type MarketWindow = {
   start: string;
   end: string;
@@ -18,6 +35,7 @@ export type MarketWindow = {
   coverageComplete: boolean;
   computedAt: string;
   signalRunId: string;
+  source: MarketSource;
 };
 
 export type MarketRoleVolume = {

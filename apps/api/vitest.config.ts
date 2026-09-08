@@ -9,5 +9,11 @@ export default defineConfig({
     globals: true,
     root: './',
     include: ['**/*.spec.ts'],
+    /*
+     * The database tier runs under vitest.config.db.ts. Excluded here so
+     * `pnpm test` stays hermetic and needs no Postgres, and so a missing
+     * test database cannot turn into a silently skipped guarantee.
+     */
+    exclude: ['**/node_modules/**', '**/dist/**', '**/*.db.spec.ts'],
   },
 });

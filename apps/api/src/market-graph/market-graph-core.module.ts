@@ -10,6 +10,7 @@ import { MarketNormalizationService } from './normalization/market-normalization
 import { MarketSignalService } from './signals/market-signal.service.js';
 import { GreenhouseClient } from './sources/greenhouse/greenhouse.client.js';
 import { JobTechClient } from './sources/jobtech/jobtech.client.js';
+import { MarketSourcePurgeService } from './sources/market-source-purge.service.js';
 import { MarketSourceRegistry } from './sources/source-registry.js';
 
 /*
@@ -53,8 +54,10 @@ import { MarketSourceRegistry } from './sources/source-registry.js';
     MarketNormalizationService,
     MarketSignalService,
     MarketGraphService,
+    MarketSourcePurgeService,
   ],
   exports: [
+    MarketSourcePurgeService,
     MarketSourceRegistry,
     MarketVocabularyService,
     MarketIngestionService,

@@ -5,6 +5,7 @@ import { MarketVocabularyService } from './ingestion/market-vocabulary.service.j
 import { MarketGraphCoreModule } from './market-graph-core.module.js';
 import { MarketNormalizationService } from './normalization/market-normalization.service.js';
 import { MarketSignalService } from './signals/market-signal.service.js';
+import { MarketSourcePurgeService } from './sources/market-source-purge.service.js';
 import { MarketSourceRegistry } from './sources/source-registry.js';
 
 /*
@@ -20,6 +21,12 @@ import { MarketSourceRegistry } from './sources/source-registry.js';
  *   node dist/market-graph/market-graph.cli.js sync    <source> <scope>...
  *   node dist/market-graph/market-graph.cli.js signals <source> <scope>...
  *   node dist/market-graph/market-graph.cli.js sources
+ *   node dist/market-graph/market-graph.cli.js purge   <source> --reason=<code> [--confirm]
+ *
+ * `purge` is a DRY RUN unless --confirm is passed. It is the only
+ * destructive verb here, and the only protection on it is shell access to
+ * the machine holding DATABASE_URL - which is stated rather than implied,
+ * because it is the whole of the control.
  *
  * The source is an argument. It used to be baked in: the CLI called
  * `ensureGreenhouseSource()` and `ingestGreenhouse()` and hard-coded the
@@ -69,13 +76,47 @@ async function main(): Promise<void> {
       return;
     }
 
+    if (command === 'purge') {
+      const reason = process.argv.find((arg) => arg.startsWith('--reason='));
+      const confirm = process.argv.includes('--confirm');
+
+      if (sourceSlug === undefined || reason === undefined) {
+        console.error(
+          'usage: market-graph.cli.js purge <source> --reason=<code> [--confirm]',
+        );
+        process.exitCode = 1;
+        return;
+      }
+
+      /*
+       * Routed through the registry, so a slug that exists in the database
+       * but is no longer a source this build knows about is refused rather
+       * than purged by a stale name.
+       */
+      registry.get(sourceSlug);
+
+      const manifest = await app.get(MarketSourcePurgeService).purge({
+        sourceSlug,
+        reason: reason.slice('--reason='.length),
+        confirm,
+        now: new Date(),
+      });
+
+      console.log(
+        confirm ? '[purge]' : '[purge-dry-run]',
+        JSON.stringify(manifest),
+      );
+
+      return;
+    }
+
     if (
       (command !== 'sync' && command !== 'signals') ||
       sourceSlug === undefined ||
       scopes.length === 0
     ) {
       console.error(
-        'usage: market-graph.cli.js <sync|signals> <source> <scope>... | sources',
+        'usage: market-graph.cli.js <sync|signals> <source> <scope>... | sources | purge <source> --reason=<code> [--confirm]',
       );
       process.exitCode = 1;
       return;

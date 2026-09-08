@@ -1,7 +1,13 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 
+import { canonicalHash } from '../common/canonical-hash.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RULESET_VERSION } from './normalization/ruleset.js';
+import { classifyFreshness } from './observations/freshness.js';
 
 /*
  * The read side of the Market Graph.
@@ -19,6 +25,24 @@ import { RULESET_VERSION } from './normalization/ruleset.js';
 
 /** A ceiling on every list endpoint, so no response is unbounded. */
 const MAX_LIMIT = 200;
+
+/**
+ * The bounded evidence sample: enough to check a claim by hand, small
+ * enough that this endpoint cannot become an export of the observation
+ * store.
+ */
+const EXPLAIN_SAMPLE_SIZE = 10;
+
+/*
+ * A ceiling on the population this endpoint will reconstruct. One signal
+ * is a single (role, skill) pair inside one window, which is small; a
+ * number this large means the predicate is wrong, and finding that out by
+ * walking millions of rows on a GET is the wrong way to find it out.
+ */
+const MAX_EXPLAIN_CANDIDATES = 50_000;
+
+/** Matches the sighting walk in the computation this reconstructs. */
+const SIGHTING_PAGE_SIZE = 5_000;
 const DEFAULT_LIMIT = 50;
 
 function clampLimit(limit?: number): number {
@@ -313,12 +337,135 @@ export class MarketGraphService {
   }
 
   /**
+   * The source a signal run drew from, recovered from its scope key.
+   *
+   * MarketSignalRun records `scopes` and `sourceScopeKey` and NO source
+   * column - the source exists only inside `canonicalHash({source,
+   * scopes})`, which is one-way. So the owner is recovered by recomputing
+   * that key for every registered source and matching. Deterministic, and
+   * O(number of sources).
+   *
+   * Matching on the scope list instead would be wrong rather than merely
+   * slower. Scope tokens are not namespaced per source - the CHECK permits
+   * '*' for "a source with no sub-scope", so two such sources collide
+   * exactly - and two historical runs in this database carry a malformed
+   * single scope string that matches no posting scope on any source, which
+   * a scope match would attribute to nothing.
+   *
+   * Fails closed. Zero matches or more than one means the population
+   * cannot be reconstructed, and serving unfiltered evidence is worse than
+   * serving none.
+   */
+  private async resolveRunSource(run: {
+    scopes: string[];
+    sourceScopeKey: string;
+  }) {
+    const sources = await this.prisma.marketSource.findMany({
+      orderBy: { slug: 'asc' },
+      select: {
+        id: true,
+        slug: true,
+        mayRedistributeDerived: true,
+        pollIntervalHours: true,
+        expectedPostingLifetimeDays: true,
+      },
+    });
+
+    const owners = sources.filter(
+      (source) =>
+        canonicalHash({ source: source.slug, scopes: run.scopes }) ===
+        run.sourceScopeKey,
+    );
+
+    const owner = owners[0];
+
+    if (owners.length !== 1 || owner === undefined) {
+      throw new ConflictException(
+        `Signal run attributes to ${owners.length} sources; refusing to explain it`,
+      );
+    }
+
+    return owner;
+  }
+
+  /**
+   * Each posting read at the version of its LATEST in-window sighting.
+   *
+   * The same rule the computation applies, and the same total ordering:
+   * observedAt is millisecond-resolution, so ties are ordinary and runSeq
+   * breaks them. runSeq is a sequence rather than a uuid because a uuid is
+   * arbitrary and different between dev, CI and production.
+   *
+   * "Latest in-window" and not "latest overall". The predicate this
+   * replaces asked whether a version had EVER been sighted in the window,
+   * which admits a superseded version alongside the successor that
+   * actually contributed - so the endpoint cited text the signal was not
+   * computed from.
+   */
+  private async latestInWindowVersions(
+    postingIds: string[],
+    windowStart: Date,
+    windowEnd: Date,
+  ): Promise<Map<string, string>> {
+    const latest = new Map<string, string>();
+
+    if (postingIds.length === 0) {
+      return latest;
+    }
+
+    for (let skip = 0; ; skip += SIGHTING_PAGE_SIZE) {
+      const page = await this.prisma.marketPostingSighting.findMany({
+        where: {
+          postingId: { in: postingIds },
+          observedAt: { gte: windowStart, lt: windowEnd },
+        },
+        orderBy: [
+          { postingId: 'asc' },
+          { observedAt: 'desc' },
+          { runSeq: 'desc' },
+          { versionId: 'asc' },
+        ],
+        skip,
+        take: SIGHTING_PAGE_SIZE,
+        select: { postingId: true, versionId: true },
+      });
+
+      for (const sighting of page) {
+        if (!latest.has(sighting.postingId)) {
+          latest.set(sighting.postingId, sighting.versionId);
+        }
+      }
+
+      if (page.length < SIGHTING_PAGE_SIZE) {
+        return latest;
+      }
+    }
+  }
+
+  /**
    * The provenance chain behind one signal, walked to the raw payload.
    *
    * This is the endpoint that makes "why does this signal exist?" a
    * question with an answer rather than a claim in a document.
+   *
+   * The contributing population is reconstructed by applying the same
+   * selection predicates the computation applied - source, scopes, window,
+   * the latest in-window version, the ruleset version, and for a
+   * prevalence signal the eligibility conjunction - written INDEPENDENTLY
+   * here rather than by calling the computation's own walk. Calling that
+   * walk would guarantee agreement and prove nothing: an audit endpoint
+   * that re-runs the thing it audits confirms its own bugs, and would have
+   * reported the 8.8 sighting-truncation defect as correct. Two
+   * implementations that agree are evidence; one called twice is not.
+   *
+   * Every filter below was absent, and the omission was not theoretical.
+   * With two sources loaded this endpoint returned 168 mention rows for a
+   * signal whose numerator was 22 - 145 of them from the other source, on
+   * another continent - and returned the IDENTICAL rows as the explanation
+   * for a different signal whose numerator was 145. The explanation
+   * carried no information about which signal it explained.
    */
-  async explainSignal(signalId: string) {
+  async explainSignal(signalId: string, asOf: Date) {
     const signal = await this.prisma.marketSignal.findUnique({
       where: { id: signalId },
       select: {
@@ -354,66 +501,270 @@ export class MarketGraphService {
       throw new NotFoundException('Unknown market signal');
     }
 
-    /*
-     * A bounded sample of the contributing evidence, not the whole set.
-     * Enough to check the claim by hand; small enough that this endpoint
-     * cannot become an export of the observation store.
-     */
-    const contributing = signal.skill
-      ? await this.prisma.marketPostingSkillMention.findMany({
-          where: {
-            rulesetVersion: signal.rulesetVersion,
-            skill: { slug: signal.skill.slug },
-            normalization: {
-              role: { slug: signal.role.slug },
-              version: {
-                sightings: {
-                  some: {
-                    observedAt: {
-                      gte: signal.windowStart,
-                      lt: signal.windowEnd,
-                    },
-                  },
-                },
-              },
-            },
-          },
-          orderBy: { id: 'asc' },
-          take: 10,
-          select: {
-            rawTerm: true,
-            termNormalized: true,
-            matchMethod: true,
-            extractedFrom: true,
-            normalization: {
-              select: {
-                titleNormalized: true,
-                companyNormalized: true,
-                roleMatchMethod: true,
-                outputHash: true,
-                version: {
-                  select: {
-                    contentHash: true,
-                    rawPayloadHash: true,
-                    titleRaw: true,
-                    sourcePublishedAt: true,
-                    firstSeenRun: {
-                      select: {
-                        id: true,
-                        status: true,
-                        startedAt: true,
-                        queryFingerprint: true,
-                        source: { select: { slug: true, licenceBasis: true } },
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        })
-      : [];
+    const source = await this.resolveRunSource(signal.run);
+    const skill = signal.skill;
 
-    return { data: { signal, contributing } };
+    /*
+     * Candidates first, then the latest-in-window rule, then the predicate
+     * re-checked on the version that rule selected.
+     *
+     * A posting is a candidate if ANY of its versions carries a matching
+     * normalization. That is deliberately looser than the answer and is
+     * what keeps the walk bounded: an edited posting whose earlier version
+     * mentioned the skill and whose latest one does not is a candidate,
+     * and is discarded below.
+     */
+    const candidates = await this.prisma.marketPosting.findMany({
+      where: {
+        sourceId: source.id,
+        sourceScope: { in: signal.run.scopes },
+        sightings: {
+          some: {
+            observedAt: { gte: signal.windowStart, lt: signal.windowEnd },
+          },
+        },
+        versions: {
+          some: {
+            normalizations: {
+              some: {
+                rulesetVersion: signal.rulesetVersion,
+                role: { slug: signal.role.slug },
+                ...(skill === null
+                  ? {}
+                  : {
+                      mentions: {
+                        some: {
+                          rulesetVersion: signal.rulesetVersion,
+                          skill: { slug: skill.slug },
+                        },
+                      },
+                    }),
+              },
+            },
+          },
+        },
+      },
+      orderBy: { externalId: 'asc' },
+      take: MAX_EXPLAIN_CANDIDATES + 1,
+      select: { id: true },
+    });
+
+    if (candidates.length > MAX_EXPLAIN_CANDIDATES) {
+      throw new ConflictException(
+        `Signal has more than ${MAX_EXPLAIN_CANDIDATES} candidate postings; refusing to reconstruct a population this large on a read`,
+      );
+    }
+
+    const latestVersion = await this.latestInWindowVersions(
+      candidates.map((posting) => posting.id),
+      signal.windowStart,
+      signal.windowEnd,
+    );
+
+    const rows = await this.prisma.marketPostingNormalization.findMany({
+      where: {
+        rulesetVersion: signal.rulesetVersion,
+        versionId: { in: [...latestVersion.values()] },
+        role: { slug: signal.role.slug },
+        /*
+         * Eligibility applies to prevalence and NOT to volume. A volume
+         * denominator is every posting that entered role resolution,
+         * whatever its description completeness; filtering it here would
+         * be the same defect as omitting it there, in the other direction.
+         */
+        ...(skill === null
+          ? {}
+          : {
+              skillExtractionStatus: 'EXTRACTED',
+              version: { descriptionCompleteness: 'FULL' },
+              mentions: {
+                some: {
+                  rulesetVersion: signal.rulesetVersion,
+                  skill: { slug: skill.slug },
+                },
+              },
+            }),
+      },
+      select: {
+        titleNormalized: true,
+        companyNormalized: true,
+        roleMatchMethod: true,
+        outputHash: true,
+        skillExtractionStatus: true,
+        mentions:
+          skill === null
+            ? {
+                where: { skillId: null, termNormalized: '' },
+                select: {
+                  rawTerm: true,
+                  termNormalized: true,
+                  matchMethod: true,
+                  extractedFrom: true,
+                },
+              }
+            : {
+                where: {
+                  rulesetVersion: signal.rulesetVersion,
+                  skill: { slug: skill.slug },
+                },
+                orderBy: [{ extractedFrom: 'asc' }, { termNormalized: 'asc' }],
+                select: {
+                  rawTerm: true,
+                  termNormalized: true,
+                  matchMethod: true,
+                  extractedFrom: true,
+                },
+              },
+        version: {
+          select: {
+            contentHash: true,
+            rawPayloadHash: true,
+            titleRaw: true,
+            sourcePublishedAt: true,
+            sourceValidThrough: true,
+            descriptionCompleteness: true,
+            firstSeenRun: {
+              select: {
+                id: true,
+                status: true,
+                startedAt: true,
+                queryFingerprint: true,
+                source: { select: { slug: true, licenceBasis: true } },
+              },
+            },
+            posting: {
+              select: {
+                id: true,
+                externalId: true,
+                sourceScope: true,
+                lastSeenAt: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    /*
+     * Ordered on externalId, which is unique and derived from the source's
+     * own key - so the order is total AND identical in dev, CI and
+     * production. The predicate this replaces ordered by the mention row's
+     * uuid, which made the sample a reader saw machine-local: two people
+     * checking the same claim by hand got different rows.
+     */
+    const contributing = [...rows].sort((a, b) =>
+      a.version.posting.externalId < b.version.posting.externalId
+        ? -1
+        : a.version.posting.externalId > b.version.posting.externalId
+          ? 1
+          : 0,
+    );
+
+    /*
+     * The latest-in-window rule already gives at most one normalization
+     * per posting, so this count is over postings. The old shape counted
+     * MENTION rows - unique on (normalization, term, locus) - so a posting
+     * matching a skill in both its title and its description produced two
+     * rows, and a "sample of 10" could be five postings against a
+     * numerator of 22.
+     */
+    const contributingPostingCount = contributing.length;
+
+    const completeCoverage = await this.prisma.marketRunScopeCoverage.groupBy({
+      by: ['sourceScope'],
+      where: {
+        sourceId: source.id,
+        sourceScope: { in: signal.run.scopes },
+        completeForScope: true,
+        finishedAt: { not: null },
+      },
+      _max: { finishedAt: true },
+    });
+
+    /*
+     * Keyed per (source, scope) and filtered to COMPLETE reads.
+     *
+     * Both halves carry weight. Grouping per source instead would lend one
+     * scope's completion certificate to another: JobTech's naturvetenskap
+     * finished at 09:19:23, and a per-source maximum would relabel 3999
+     * postings on two scopes the offset cap made it impossible to finish
+     * reading as FRESH. Dropping completeForScope is worse still -
+     * finishedAt is populated even on a scope that 404'd, so a failed read
+     * would count as coverage and UNAVAILABLE would become unreachable for
+     * all 9628 postings.
+     */
+    const coverageByScope = new Map(
+      completeCoverage.map((row) => [row.sourceScope, row._max.finishedAt]),
+    );
+
+    const sample = contributing.slice(0, EXPLAIN_SAMPLE_SIZE).map((row) => ({
+      ...row,
+      /*
+       * Freshness is a property of an OBSERVATION, so it is computed
+       * here - where the subject is a posting - from that posting's own
+       * lastSeenAt against an injected asOf. No row timestamp reaches
+       * it: updatedAt moves whenever anything rewrites the row, and a
+       * verdict built from it would report a re-ingest as new market
+       * evidence.
+       */
+      freshness: classifyFreshness({
+        asOf,
+        lastSeenAt: row.version.posting.lastSeenAt,
+        lastCompleteCoverageAt:
+          coverageByScope.get(row.version.posting.sourceScope) ?? null,
+        sourceValidThrough: row.version.sourceValidThrough,
+        pollIntervalHours: source.pollIntervalHours,
+        expectedPostingLifetimeDays: source.expectedPostingLifetimeDays,
+      }),
+    }));
+
+    return {
+      data: {
+        signal,
+        /*
+         * Echoed, because a freshness verdict without the instant it was
+         * taken at is unreproducible - and every verdict below is a
+         * function of it.
+         */
+        asOf,
+        evidence: {
+          /*
+           * Named rather than left to be inferred from the shape. The two
+           * populations differ in a way that changes how the numbers may
+           * be read, and a volume signal previously returned a bare empty
+           * array - indistinguishable from "we looked and found nothing
+           * supports this number", which for an auditability endpoint is
+           * the worst available answer.
+           */
+          kind:
+            skill === null
+              ? 'ROLE_RESOLVED_POSTINGS'
+              : 'ELIGIBLE_POSTINGS_MENTIONING_SKILL',
+          source: {
+            slug: source.slug,
+            mayRedistributeDerived: source.mayRedistributeDerived,
+          },
+          scopes: signal.run.scopes,
+          /*
+           * The number the sample is drawn from. Without it the sample
+           * cannot be checked against numeratorCount, which is this
+           * endpoint's whole purpose - ten rows of unknown provenance
+           * prove nothing about a numerator of 22.
+           */
+          contributingPostingCount,
+          sampleSize: sample.length,
+          sampleTruncated: contributingPostingCount > sample.length,
+          /*
+           * The other half of a volume fraction. A sample of the numerator
+           * explains only the top of the ratio, and the denominator - every
+           * posting that entered role resolution, 6456 of 6671 of which
+           * resolved to no role at all - is the number that makes the share
+           * honest. These come off the run's own stats; no extra query.
+           */
+          denominatorComposition: skill === null ? signal.run.stats : null,
+          contributing: sample,
+        },
+      },
+    };
   }
 }

@@ -13,7 +13,6 @@ function input(over: Partial<FreshnessInput> = {}): FreshnessInput {
     lastSeenAt: new Date(NOW.getTime() - HOUR),
     lastCompleteCoverageAt: new Date(NOW.getTime() - HOUR / 2),
     sourceValidThrough: null,
-    firstSeenAt: new Date(NOW.getTime() - 10 * DAY),
     pollIntervalHours: 24,
     expectedPostingLifetimeDays: 30,
     ...over,
@@ -131,7 +130,6 @@ describe('the basis of the verdict', () => {
     const shortLived = classifyFreshness(
       input({
         lastSeenAt: new Date(NOW.getTime() - 5 * DAY),
-        firstSeenAt: new Date(NOW.getTime() - 10 * DAY),
         /* Expired eight days ago: a two-day advertised life. */
         sourceValidThrough: new Date(NOW.getTime() - 8 * DAY),
       }),
@@ -161,5 +159,89 @@ describe('determinism', () => {
 
   it('returns the same verdict for the same inputs every time', () => {
     expect(classifyFreshness(input())).toEqual(classifyFreshness(input()));
+  });
+});
+
+describe('the expected lifetime', () => {
+  /*
+   * The defect this replaced, and why it only became visible with a second
+   * source. The lifetime was `sourceValidThrough - firstSeenAt`, which
+   * makes a posting's advertised life a function of when OUR crawler
+   * started looking. Greenhouse states an expiry on 16 of 2957 postings so
+   * the branch was effectively dead; JobTech states one on effectively all
+   * 6671.
+   */
+  it('counts from when the posting was last seen, not from when we first saw it', () => {
+    const early = classifyFreshness(
+      input({
+        lastSeenAt: new Date(NOW.getTime() - 5 * DAY),
+        lastCompleteCoverageAt: new Date(NOW.getTime() - HOUR),
+      }),
+    );
+
+    /* Five days seen, thirty days expected: still inside its life. */
+    expect(early.verdict).toBe('AGING');
+    expect(early.expectedLiveUntil.getTime()).toBe(
+      NOW.getTime() - 5 * DAY + 30 * DAY,
+    );
+  });
+
+  /*
+   * An ad already expired when we found it used to produce a NEGATIVE
+   * lifetime, which Math.max(lifetimeMs, freshWindowMs) silently absorbed
+   * into the fresh window - making AGING unreachable for that posting and
+   * STALE reachable only after the fresh window rather than after its
+   * actual deadline.
+   */
+  it('gives an already-expired posting a real verdict rather than an absorbed one', () => {
+    const expired = classifyFreshness(
+      input({
+        lastSeenAt: new Date(NOW.getTime() - 10 * DAY),
+        lastCompleteCoverageAt: new Date(NOW.getTime() - HOUR),
+        sourceValidThrough: new Date(NOW.getTime() - 9 * DAY),
+      }),
+    );
+
+    expect(expired.verdict).toBe('STALE');
+    expect(expired.expectedLiveUntil.getTime()).toBeLessThan(NOW.getTime());
+    expect(expired.lifetimeBasis).toBe('SOURCE_STATED');
+  });
+
+  /*
+   * The two figures are bounds from different directions and are combined
+   * as a minimum. An employer deadline six months out does not make a
+   * posting we stopped seeing in March still live in September - the
+   * deadline says when the advert stops being valid, not that we can still
+   * see it.
+   */
+  it('does not let a distant employer deadline outlive our own expectation', () => {
+    const distant = classifyFreshness(
+      input({
+        lastSeenAt: new Date(NOW.getTime() - 40 * DAY),
+        lastCompleteCoverageAt: new Date(NOW.getTime() - HOUR),
+        sourceValidThrough: new Date(NOW.getTime() + 180 * DAY),
+      }),
+    );
+
+    expect(distant.verdict).toBe('STALE');
+    expect(distant.lifetimeBasis).toBe('DEFAULT');
+  });
+
+  /*
+   * The basis names the figure that DECIDED the verdict, not merely the
+   * one the source supplied. Calling the case above SOURCE_STATED would
+   * credit the source for a number it did not determine, and the point of
+   * recording a basis is that it is falsifiable where the verdict is not.
+   */
+  it('names the figure that bound the answer, not the one that was merely present', () => {
+    const bound = classifyFreshness(
+      input({ sourceValidThrough: new Date(NOW.getTime() + 5 * DAY) }),
+    );
+    const unbound = classifyFreshness(
+      input({ sourceValidThrough: new Date(NOW.getTime() + 500 * DAY) }),
+    );
+
+    expect(bound.lifetimeBasis).toBe('SOURCE_STATED');
+    expect(unbound.lifetimeBasis).toBe('DEFAULT');
   });
 });

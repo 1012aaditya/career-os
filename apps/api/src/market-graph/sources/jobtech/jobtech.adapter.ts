@@ -151,6 +151,17 @@ export function epochMillisInstant(value: unknown): string | null {
  * So the contact block never reaches the database. What is lost is the
  * ability to say who to contact, which nothing in a market graph needs.
  * The employer, the role and the requirements all survive intact.
+ *
+ * This reduces the exposure; it does NOT remove it, and the distinction
+ * was overstated when this was written. The stripping covers the
+ * STRUCTURED fields and not the ad BODY: nobody removes "kontakta
+ * Rekryteringskonsult <name> pa <phone>, eller <email>" from the
+ * description. Measured on the stored corpus, 2320 of 6671 descriptionRaw
+ * rows carry an email address (1420 distinct) and 993 carry a Swedish
+ * mobile number, mirrored into descriptionText. Neither column is in any
+ * read select, and as of 8.9 a boundary test enforces that rather than
+ * leaving it to convention - but the honest claim is narrower than the
+ * one this comment used to make on its own.
  */
 const CONTACT_FIELDS = ['application_contacts'] as const;
 

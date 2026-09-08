@@ -257,11 +257,25 @@ describe('the Market Graph source tree', () => {
   });
 
   it('reads no clock inside a pure layer', () => {
-    const pure = files.filter((file) =>
-      /\/(observations|normalization|signals)\//.test(file),
+    /*
+     * market-graph.service.ts is in this list deliberately. It was not,
+     * and a `new Date()` inserted into it passed all 321 tests - which
+     * would have made a freshness verdict a function of when the request
+     * happened to be handled rather than of a stated instant, and would
+     * have let two postings in one response carry verdicts taken against
+     * different clocks. The read service takes `asOf` from the controller,
+     * which is the request edge and the one place a clock belongs.
+     */
+    const pure = files.filter(
+      (file) =>
+        /\/(observations|normalization|signals)\//.test(file) ||
+        file.endsWith('market-graph.service.ts'),
     );
 
     expect(pure.length).toBeGreaterThan(3);
+    expect(pure.some((file) => file.endsWith('market-graph.service.ts'))).toBe(
+      true,
+    );
 
     const offenders = pure.filter((file) => {
       /*
@@ -281,3 +295,167 @@ describe('the Market Graph source tree', () => {
 function stripComments(code: string): string {
   return code.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 }
+
+describe('what a purge may not quietly make easier', () => {
+  /*
+   * The referential actions, pinned by name.
+   *
+   * Sixteen RESTRICT edges are the reason a source cannot be deleted with
+   * one statement, and they were protected by nothing but reviewer memory:
+   * no spec in this repository mentioned onDelete, Restrict or the
+   * migration directory. Flipping any of them to Cascade turns
+   * `DELETE FROM "MarketSource"` into a one-liner that takes a source's
+   * entire history - which is exactly what a purge author in a hurry would
+   * reach for. The awkward ordering the purge service has to follow IS the
+   * safety property, so changing one of these must be a deliberate act
+   * that edits this list.
+   */
+  it('declares exactly the referential actions Phase 8 relies on', () => {
+    const schema = readFileSync(SCHEMA, 'utf8');
+    const actions: string[] = [];
+
+    for (const model of schema.matchAll(
+      /^model\s+(Market\w+)\s*\{([\s\S]*?)^\}/gm,
+    )) {
+      for (const line of (model[2] ?? '').split('\n')) {
+        if (!line.includes('@relation(') || !line.includes('onDelete:')) {
+          continue;
+        }
+
+        const field = line.trim().split(/\s+/)[0];
+        const action = /onDelete:\s*(\w+)/.exec(line)?.[1];
+
+        actions.push(`${model[1]}.${field}: ${action}`);
+      }
+    }
+
+    expect(actions.sort()).toEqual([
+      'MarketIngestionRun.source: Restrict',
+      'MarketPosting.source: Restrict',
+      'MarketPostingNormalization.role: Restrict',
+      'MarketPostingNormalization.roleAlias: Restrict',
+      'MarketPostingNormalization.version: Cascade',
+      'MarketPostingSighting.posting: Cascade',
+      'MarketPostingSighting.run: Restrict',
+      'MarketPostingSighting.version: Cascade',
+      'MarketPostingSkillMention.alias: Restrict',
+      'MarketPostingSkillMention.normalization: Cascade',
+      'MarketPostingSkillMention.skill: Restrict',
+      'MarketPostingVersion.firstSeenRun: Restrict',
+      'MarketPostingVersion.posting: Cascade',
+      'MarketRole.supersededBy: Restrict',
+      'MarketRoleAlias.role: Restrict',
+      'MarketRunScopeCoverage.run: Restrict',
+      'MarketRunScopeCoverage.source: Restrict',
+      'MarketSignal.role: Restrict',
+      'MarketSignal.run: Cascade',
+      'MarketSignal.skill: Restrict',
+      'MarketSkill.supersededBy: Restrict',
+      'MarketSkillAlias.skill: Restrict',
+    ]);
+  });
+
+  /*
+   * Phase 8 has one migration, and the second source needed none. That is
+   * a claim about the canonical contract holding across sources, and it
+   * stops being true the moment anything adds a column - so it is asserted
+   * rather than repeated in a document.
+   */
+  it('adds no migration beyond the one that created the Market Graph', () => {
+    const migrations = readdirSync(
+      fileURLToPath(new URL('../../prisma/migrations', import.meta.url)),
+      { withFileTypes: true },
+    )
+      .filter((entry) => entry.isDirectory() && entry.name.includes('market'))
+      .map((entry) => entry.name);
+
+    expect(migrations).toEqual(['20260908120000_add_market_graph_foundation']);
+  });
+});
+
+describe('what the Market Graph may not store or serve', () => {
+  /*
+   * D7: freshness is derived at an explicit asOf and never stored. A
+   * stored verdict is a judgement made at time T that goes on asserting
+   * itself at T plus six months, and keeping it honest needs the sweeper
+   * whose write churn this phase exists to avoid.
+   *
+   * The existing forbidden-column scan covers score/fit/ranking vocabulary
+   * and Float columns, and none of `freshnessVerdict`, `isStale`,
+   * `lastCompleteCoverageAt` or `purgedAt` matched any of it - a String or
+   * a DateTime slips straight through a Float scan.
+   */
+  it('declares no stored freshness, coverage-instant or purge column', () => {
+    const schema = readFileSync(SCHEMA, 'utf8');
+    const offenders: string[] = [];
+
+    for (const model of schema.matchAll(
+      /^model\s+(Market\w+)\s*\{([\s\S]*?)^\}/gm,
+    )) {
+      for (const line of (model[2] ?? '').split('\n')) {
+        const field = line.trim().split(/\s+/)[0] ?? '';
+
+        if (
+          line.includes('@relation(') ||
+          field.startsWith('@') ||
+          field === ''
+        ) {
+          continue;
+        }
+
+        if (
+          /fresh|stale|aging|unavailable|coverageat|purg|tombstone/i.test(field)
+        ) {
+          offenders.push(`${model[1]}.${field}`);
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('detects a planted freshness column, so the scan above is not vacuous', () => {
+    expect(
+      /fresh|stale|aging|unavailable|coverageat|purg|tombstone/i.test(
+        'freshnessVerdict',
+      ),
+    ).toBe(true);
+    expect(
+      /fresh|stale|aging|unavailable|coverageat|purg|tombstone/i.test(
+        'lastCompleteCoverageAt',
+      ),
+    ).toBe(true);
+    expect(
+      /fresh|stale|aging|unavailable|coverageat|purg|tombstone/i.test(
+        'companyNormalized',
+      ),
+    ).toBe(false);
+  });
+
+  /*
+   * The JobTech adapter strips application_contacts and the employer's
+   * email and phone before storage - but it never stripped the ad BODY,
+   * and 2320 of 6671 stored descriptions carry an email address (1420
+   * distinct) with 993 carrying a Swedish mobile number. Greenhouse adds
+   * 389. Neither column is in any read select today, and this is what
+   * keeps it that way: the protection is a test, not a convention.
+   */
+  it('serves no description text and no raw payload from the read side', () => {
+    const code = stripComments(
+      readFileSync(
+        fileURLToPath(new URL('./market-graph.service.ts', import.meta.url)),
+        'utf8',
+      ),
+    );
+
+    for (const forbidden of [
+      'descriptionRaw',
+      'descriptionText',
+      'rawPayload:',
+    ]) {
+      expect(`${forbidden}: ${code.includes(forbidden)}`).toBe(
+        `${forbidden}: false`,
+      );
+    }
+  });
+});

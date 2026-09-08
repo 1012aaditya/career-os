@@ -327,8 +327,23 @@ as a measured market median. Every freshness verdict RETURNS
 to go back and find - which means a reader can see at the point of use
 that a verdict rests on a guess. `application_deadline` would replace the
 guess with the employer's own stated expiry, and is parsed for that
-purpose — but it was null on all 864 postings sampled, so **freshness does
-not depend on it today** and the code must not behave as though it does.
+purpose.
+
+> **Corrected at 8.9.** The sentence that stood here said it "was null on
+> all 864 postings sampled, so freshness does not depend on it today". That
+> was true of Greenhouse and is false of the corpus: JobTech supplies
+> `application_deadline` on **6671 of 6671** versions, Greenhouse on 16 of
+> 2958, so **69% of stored postings now carry an employer-stated expiry**
+> and the `SOURCE_STATED` path is live rather than dormant. Wiring
+> freshness exposed a defect in that path which the null corpus had hidden:
+> the lifetime was `sourceValidThrough - firstSeenAt`, which made a
+> posting's advertised life a function of when our crawler started looking
+> — an ad first seen the day before its deadline got a one-day lifetime,
+> and an ad already expired when we found it got a negative one, which
+> `Math.max(lifetimeMs, freshWindowMs)` absorbed into the fresh window and
+> made `AGING` unreachable for it. The lifetime is now the minimum of the
+> employer's deadline and `lastSeenAt + expectedPostingLifetimeDays`, and
+> `lifetimeBasis` names whichever of the two actually bound the answer.
 
 ---
 
@@ -581,7 +596,8 @@ or Phase 7 table.
   `education`; `vercel` does not.
 - An unknown board returns 404 with `{"status":404,"error":"Job not
   found"}`.
-- `application_deadline` was null on all 864 postings sampled.
+- `application_deadline` was null on all 864 postings sampled. (True of
+  Greenhouse only; JobTech supplies it on effectively every ad.)
 
 ## Known unknowns
 
@@ -1016,6 +1032,25 @@ what makes it a test of the abstraction rather than more of the same data:
    deliberate override of the rule that raw observations are kept verbatim.
    The employer, the role and the requirements survive; only the way to
    phone a named recruiter is gone.
+
+   > **Corrected at 8.9, and this correction matters more than the claim it
+   > qualifies.** The paragraph above is true of the *structured field* and
+   > false of the *ad body*. `application_contacts` and the employer's
+   > `email` / `phone_number` are stripped; nobody strips
+   > `"Vid frågor vänligen kontakta Rekryteringskonsult <name> på <phone>,
+   > eller <email>"` out of the description. Measured on the stored corpus:
+   > **2320 of 6671 JobTech `descriptionRaw` rows contain an email address
+   > (1420 distinct, 1670 of `firstname.lastname@` shape) and 993 contain a
+   > Swedish mobile number**; `MarketPostingNormalization.descriptionText`
+   > mirrors it; Greenhouse adds 389. So the phase stores roughly 1400
+   > distinct personal email addresses and about a thousand recruiter
+   > phone numbers, and the honest statement is that contact stripping
+   > reduced the exposure rather than removed it.
+   >
+   > Nothing leaks today — neither column appears in any read `select` —
+   > and as of 8.9 that is enforced by a test rather than by convention.
+   > But "the contact block never reaches the database" was too strong, and
+   > the deletion path this now needs is the purge, which 8.9 builds.
 2. **Sweden only, and only Platsbanken.** Roles posted solely on a company
    site or LinkedIn are absent, so absence is not evidence of absence.
    Descriptions are in Swedish, so the skill dictionary — built for English
@@ -1103,12 +1138,15 @@ overstatement is itself worth recording.
   `MarketSource` columns that exist to feed it are only ever echoed back.
   D7 describes it in the present tense throughout; it should be read as a
   design that is implemented at the unit level and not wired up.
-- **`explainSignal` shows an approximation of the contributing set.** It
-  filters by role, skill, ruleset and window, but not by the signal run's
-  scopes, not by prevalence eligibility, and not to the version the
-  computation actually selected. It returns nothing at all for
-  `ROLE_POSTING_VOLUME`. It is right on the current corpus by coincidence,
-  not by construction.
+- ~~**`explainSignal` shows an approximation of the contributing set.**~~
+  **Resolved at 8.9, and this entry understated it.** The claim that it was
+  "right on the current corpus by coincidence" was wrong: measured on the
+  run the read side was actually serving, the endpoint returned **168
+  mention rows for a signal whose numerator was 22, 145 of them from the
+  other source**, and returned the *identical* rows as the explanation for
+  a different signal whose numerator was 145 — so the explanation carried
+  no information about which signal it explained. The failure did not exist
+  while there was one source and was introduced silently by the second.
 - **`distinctCompanyCount` is a board count on the first source.**
   Greenhouse's `company_name` is a board-level constant — one company per
   board, always — so an employer running two board tokens counts as two
@@ -1120,13 +1158,11 @@ overstatement is itself worth recording.
   the market for the source whose position is unresolved rather than raise
   the question, so it is exposed instead of enforced — and named here so
   the choice is visible.
-- **There is no purge path.** Raw payloads are retained permanently by
-  design, and sixteen `ON DELETE RESTRICT` foreign keys mean a manual
-  deletion actively fails unless six tables are cleared in order. There is
-  currently no mechanism to honour a takedown request. `DELETE FROM
-  "MarketPosting"` also still cascades to versions and sightings, so the
-  claim that RESTRICT makes payload retention "a property of the database"
-  holds for the run direction and not the posting direction.
+- ~~**There is no purge path.**~~ **Resolved at 8.9.** See the 8.9 section.
+  The observation about direction stands and is now load-bearing rather
+  than incidental: `DELETE FROM "MarketPosting"` cascades to five tables in
+  one statement and the RESTRICT graph does not stop it, so the guard
+  against that is a reviewed method and a test, not a constraint.
 - **No historical recomputation has been exercised.** `compute` now takes
   a `rulesetVersion`, so a v1 signal *can* be recomputed under v1 rules,
   but nothing has done it and no test covers it.
@@ -1140,3 +1176,202 @@ overstatement is itself worth recording.
 - **The tombstone feed is not modelled.** JobTech's stream emits removals
   as a stub with no title; the adapter refuses and counts them. Recording a
   delisting — which would give true posting lifespans — is unbuilt.
+
+---
+
+# Phase 8.9 — the three blockers
+
+The 8.8 review ended at **NOT READY** with three named blockers: freshness
+was implemented but unwired, `explainSignal` described a population that
+was not the one the signal came from, and there was no way to honour a
+takedown. This section records how each was closed, and what is still not
+true afterwards.
+
+Six review agents worked the problem in parallel before any code changed.
+They disagreed in three places that mattered, and the disagreements are
+recorded here because the resolutions are the design.
+
+## Blocker 1 — freshness, wired
+
+**Where it went, and the argument that decided it.** One agent proposed a
+per-*scope* verdict on `GET /v1/market/sources`, deriving a scope's
+`lastSeenAt` from its coverage rows. Two others rejected it, and correctly:
+freshness is a property of an **observation**, coverage is a property of a
+**sampling frame**, and reporting the second under the first imports a
+claim about the market onto a claim about our crawler. A scope has no
+`lastSeenAt`, and manufacturing one as `MAX(posting.lastSeenAt)` is very
+nearly `MAX(coverage.finishedAt)` for the same scope — so the coverage gate
+would compare a number against itself and `UNAVAILABLE` would become
+structurally unreachable.
+
+So the verdict stays per-posting, and it surfaces on **`GET
+/v1/market/signals/:id`**, where each contributing row *is* a posting and
+"can I trust this evidence?" is the endpoint's whole job. No new route, no
+new column, no new resource.
+
+**The derivation, and the two mutations it exists to stop.**
+`lastCompleteCoverageAt` is `MAX(finishedAt)` over `MarketRunScopeCoverage`
+**grouped by `(sourceId, sourceScope)`** and **filtered to
+`completeForScope = true`**. Both halves were measured against the live
+corpus:
+
+| derivation | UNAVAILABLE | FRESH |
+|---|---|---|
+| correct — per scope, complete reads only | 5999 | 3629 |
+| grouped per **source** | 2000 | 7628 |
+| **without** the `completeForScope` filter | 0 | 9628 |
+
+Grouping per source lends one scope's completion certificate to another:
+JobTech's `naturvetenskap` finished at 09:19:23, and the per-source maximum
+relabels **3999 postings on two scopes the offset cap made it impossible to
+finish reading** as FRESH. Dropping the completeness filter is worse —
+`finishedAt` is populated even on a scope that 404'd, so a failed read
+counts as coverage and `UNAVAILABLE` disappears entirely for all 9628
+postings. A single fixture row guards both: a scope whose only *complete*
+read predates its postings' last sighting, with a *later incomplete* read
+on a second run.
+
+**The defect wiring exposed.** See the correction at D7 above: the
+`SOURCE_STATED` lifetime was computed from `firstSeenAt` and is now the
+minimum of the employer's deadline and `lastSeenAt + expectedPostingLifetimeDays`.
+
+**Anti-fabrication.** `classifyFreshness` takes seven named values and no
+rows, and `MarketRunScopeCoverage` has no `createdAt` or `updatedAt` at
+all. The read path selects neither. `asOf` is read once, in the controller,
+and echoed in the response so a verdict is reproducible by hand; the
+boundary spec's no-clock scan was widened to cover `market-graph.service.ts`,
+which it did not — a `new Date()` inserted there passed all 321 tests.
+
+## Blocker 2 — `explainSignal`, filtered to its own population
+
+Five filters were missing, not two: **source**, **scopes**, the
+**eligibility conjunction** (both halves), the **latest-in-window version**
+rule, and a **deterministic ordering**. The old query also counted mention
+rows rather than postings, so a "sample of 10" could be five postings
+against a numerator of 22, and it ordered by a uuid — making the sample a
+reader saw machine-local, in the endpoint whose purpose is that two people
+can check the same claim by hand.
+
+**Recovering the source without a schema change.** `MarketSignalRun` stores
+`scopes` and `sourceScopeKey` and **no source column** — the source exists
+only inside `canonicalHash({source, scopes})`, which is one-way. Four of
+six agents wanted a `sourceId` column. It is not added. The owner is
+recovered by recomputing that key for every registered source and matching,
+which is deterministic, O(number of sources), reproduces every key in this
+database — including the two malformed-scope runs whose scope string
+matches no posting scope on any source and which scope-name matching would
+misattribute — and **fails closed**: zero matches or more than one refuses
+rather than serving unfiltered evidence.
+
+**Volume signals** return the postings that resolved to the role, labelled
+`kind: 'ROLE_RESOLVED_POSTINGS'`, alongside the run's own stats as the
+denominator's composition. A bare `[]` is indistinguishable from "we looked
+and found nothing supports this number", which for an auditability endpoint
+is the worst available answer. Eligibility is deliberately **not** applied
+here: volume's denominator is every posting that entered role resolution,
+and filtering it would be the same defect as omitting it from prevalence,
+in the other direction.
+
+**Not by re-derivation.** Calling the computation's own walk would
+guarantee agreement and prove nothing — an audit endpoint that re-runs the
+thing it audits confirms its own bugs, and would have reported the 8.8
+sighting-truncation defect as correct. The predicates are written
+independently and then checked against the stored number.
+
+**Verified: 705 of 705 signals across all six runs reconstruct to exactly
+their stored `numeratorCount`**, with zero cross-source and zero
+out-of-scope rows — on the live corpus, not a fixture.
+
+## Blocker 3 — a source purge
+
+`node dist/market-graph/market-graph.cli.js purge <source> --reason=<code> [--confirm]`.
+CLI only; a dry run unless `--confirm`; the route table still pins exactly
+eight GET routes and no write route.
+
+- **One transaction**, `Serializable`, 300s timeout, ordered children-first
+  through the RESTRICT graph. Not chunked across transactions: a
+  half-completed purge is worse than either endpoint.
+- **Explicit per-table deletes, not the cascade.** `deleteMany` on
+  `MarketPosting` alone would take 31,919 rows across five tables in one
+  statement and report none of it. The cascade is demoted to a backstop
+  that must read zero.
+- **Proven inside the same transaction.** Global row counts before and
+  after; every table's delta must equal exactly what the manifest claims
+  and the four vocabulary tables' deltas must be zero; then every purge
+  predicate is re-counted and must return zero. Anything else rolls back.
+- **Signal runs attributed by scope-key preimage**, computed before
+  anything is deleted, refusing the whole purge on zero or multiple owners.
+  Never by scope name; never by timestamp — the two source runs in this
+  database were computed **591 milliseconds apart**.
+- **Vocabulary is never touched.** 17 of 19 roles and 59 of 61 skills are
+  shared. They come from `ruleset.ts`, which is code, not source data;
+  deleting one would be undone by the next sync with a *new* uuid, which
+  converts a shared row into a silent identity split.
+- **The `MarketSource` row is retained**, `isEnabled` forced false as the
+  first write (conditionally, so a second purge writes nothing at all).
+  Retention is what makes a repeat purge a no-op rather than a `NotFound`
+  indistinguishable from a typo, and what keeps every historical run
+  attributable — the slug is the preimage attribution depends on.
+
+**Verified on a clone of the live database**, never on the live one:
+Greenhouse purged (650 signals, 5 signal runs, 13657 mentions, 5913
+normalizations, 8865 sightings, 2958 versions, 2957 postings, 33 coverage
+rows, 3 ingestion runs); JobTech intact to the row; vocabulary unchanged at
+19/61/159/232; **zero orphans across every single-column Market foreign
+key**; a second purge a clean no-op; and all 55 surviving signals still
+explaining correctly afterwards.
+
+## The test tier this needed
+
+Nothing in the repository constructed `MarketGraphService`,
+`MarketSignalService`, `MarketIngestionService` or
+`MarketNormalizationService` — the entire database-touching half of Phase 8
+had no test of any kind, which is why both defects shipped. Deleting the
+whole evidence query from `explainSignal` passed all 321 tests.
+
+A new tier (`pnpm test:db`, `test/market-graph/*.db.spec.ts`, 39 tests)
+runs against a real Postgres. That is not a preference: the two things it
+proves — a purge's atomicity under RESTRICT and CASCADE, and a five-table
+nested filter reproducing a signal's population — **are** the database's
+semantics, and the existing in-memory double's `$transaction` is a
+passthrough with no rollback, so "a failed purge leaves no partial state"
+would pass there against a purge with no transaction at all. The tier
+**fails** rather than skipping when its database URL is absent.
+
+Mutation-tested, every mutation caught: removing the source filter, the
+scope filter, the eligibility conjunction, **half** the eligibility
+conjunction, the latest-in-window rule, returning `[]` for volume again;
+and on the purge, tidying up "orphaned" vocabulary, leaving signals whose
+evidence was deleted, and attributing runs by scope name.
+
+## What is still not true
+
+- **`AGING` and `STALE` are fixture-verified only.** The whole corpus was
+  observed inside 70 minutes, so nothing can reach `AGING` before
+  2026-09-10 or `STALE` before 2026-10-08 — and not then if ingestion runs.
+  **FRESH and UNAVAILABLE are observed on live data; the other two are
+  not.**
+- **The eligibility filter is fixture-verified only.** All 9629
+  normalizations are `EXTRACTED` + `FULL`, so adding the conjunction
+  changed not one row in this corpus.
+- **`MarketSignalRun` still records no source.** Deferred deliberately
+  rather than smuggled in as an additive column. Both the explain filter
+  and the purge depend on inverting a hash, which works, is deterministic
+  and fails closed — but a column would make both trivially correct, and
+  the preimage stops working the day a run legitimately spans two sources.
+  That day is a Phase 9 decision, and the refusal is the tripwire.
+- **The purge leaves no durable record inside the database.** The manifest
+  is returned, printed and hashed; it is not stored. Storing it needs
+  either a second migration or a fifteenth model, and the phase's "one
+  migration, and the second source needed none" claim is now pinned by a
+  test. An operator who does not keep the manifest keeps no audit trail.
+- **The advisory lock excludes other purges, not ingestion.** Ingestion is
+  excluded by the pre-flight `RUNNING` check, the `isEnabled` interlock and
+  the residue assertion — not by the lock.
+- **A CLI-only purge is protected by nothing but shell access** to the
+  machine holding `DATABASE_URL`. `--confirm` and the mandatory reason code
+  are the whole of the control.
+- **`mayRedistributeDerived` is now surfaced on the evidence** but still
+  not enforced. The source filter incidentally removed the live leak — a
+  non-redistributable source's postings were being served as evidence for a
+  redistributable source's signal — but the column still gates nothing.

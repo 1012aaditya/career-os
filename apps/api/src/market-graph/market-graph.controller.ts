@@ -70,7 +70,13 @@ export class MarketGraphController {
 
   @Get('signals/:id')
   explainSignal(@Param('id') id: string) {
-    return this.marketGraph.explainSignal(id);
+    /*
+     * The clock is read here, at the request edge, and threaded down as
+     * an explicit instant. Read inside the service it would be read more
+     * than once per response, and two postings in one body would then
+     * carry verdicts taken against different instants.
+     */
+    return this.marketGraph.explainSignal(id, new Date());
   }
 
   @Get('unresolved-titles')

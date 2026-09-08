@@ -102,6 +102,12 @@ const ROUTES: Array<[string, string]> = [
   ['get', '/v1/market/snapshot'],
   ['get', '/v1/market/signals'],
   ['get', '/v1/market/roles/backend-engineer/skills'],
+  /*
+   * Present in the pinned route table but missing from this list, so the
+   * three authentication tests below never covered it - on the one route
+   * that walks provenance and now carries a freshness verdict.
+   */
+  ['get', '/v1/market/signals/00000000-0000-4000-8000-000000000000'],
   ['get', '/v1/market/unresolved-titles'],
 ];
 

@@ -2,6 +2,13 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 
 import { PrismaModule } from '../prisma/prisma.module.js';
+import { BlsJoltsDataset } from './datasets/bls.dataset.js';
+import { MarketDatasetRegistry } from './datasets/dataset-registry.js';
+import { IndeedHiringLabDataset } from './datasets/indeed-hiring-lab.dataset.js';
+import { MarketDatasetService } from './datasets/market-dataset.service.js';
+import { NocDataset } from './datasets/noc.dataset.js';
+import { OnetDataset } from './datasets/onet.dataset.js';
+import { StatCanJvwsDataset } from './datasets/statcan.dataset.js';
 import { MarketIngestionRunService } from './ingestion/market-ingestion-run.service.js';
 import { MarketIngestionService } from './ingestion/market-ingestion.service.js';
 import { MarketVocabularyService } from './ingestion/market-vocabulary.service.js';
@@ -58,6 +65,13 @@ import { UsaJobsHistoricClient } from './sources/usajobs-historic/usajobs-histor
     JobicyClient,
     CanadaJobBankClient,
     MarketSourceRegistry,
+    OnetDataset,
+    NocDataset,
+    IndeedHiringLabDataset,
+    BlsJoltsDataset,
+    StatCanJvwsDataset,
+    MarketDatasetRegistry,
+    MarketDatasetService,
     MarketVocabularyService,
     MarketIngestionRunService,
     MarketIngestionService,
@@ -67,6 +81,8 @@ import { UsaJobsHistoricClient } from './sources/usajobs-historic/usajobs-histor
     MarketSourcePurgeService,
   ],
   exports: [
+    MarketDatasetRegistry,
+    MarketDatasetService,
     MarketSourcePurgeService,
     MarketSourceRegistry,
     MarketVocabularyService,

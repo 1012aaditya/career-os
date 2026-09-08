@@ -838,4 +838,101 @@ export class MarketGraphService {
       },
     };
   }
+
+  /**
+   * Published statistics, with the attribution their licences oblige.
+   *
+   * Kept separate from the signal endpoints, and that separation is the
+   * point. A signal is computed by us from postings we observed; these are
+   * figures a statistical agency published. Serving them through one
+   * endpoint would invite a reader to add them together, and they do not
+   * add - one counts postings, the other counts openings.
+   */
+  async marketStatistics(limit?: number) {
+    const versions = await this.prisma.marketDatasetVersion.findMany({
+      where: {
+        kind: 'AGGREGATE',
+        source: { mayRedistributeDerived: true },
+      },
+      orderBy: [{ datasetKey: 'asc' }, { version: 'desc' }],
+      select: {
+        id: true,
+        datasetKey: true,
+        version: true,
+        releasedAt: true,
+        retrievedAt: true,
+        rowCount: true,
+        attribution: true,
+        source: { select: { slug: true, displayName: true } },
+        observations: {
+          orderBy: [{ periodStart: 'desc' }, { seriesKey: 'asc' }],
+          take: clampLimit(limit),
+          select: {
+            seriesKey: true,
+            geography: true,
+            category: true,
+            periodStart: true,
+            periodEnd: true,
+            periodType: true,
+            metric: true,
+            value: true,
+            unit: true,
+          },
+        },
+      },
+    });
+
+    return {
+      data: versions.map((version) => ({
+        source: version.source,
+        datasetKey: version.datasetKey,
+        version: version.version,
+        /*
+         * Both instants, deliberately. releasedAt is the publisher's, and
+         * retrievedAt is ours - importing today does not make a 2023
+         * release current, and only showing one of them would let it.
+         */
+        releasedAt: version.releasedAt,
+        retrievedAt: version.retrievedAt,
+        rowCount: version.rowCount,
+        attribution: version.attribution,
+        observations: version.observations,
+      })),
+    };
+  }
+
+  /**
+   * Occupational vocabulary imported from published taxonomies.
+   *
+   * These are NOT the canonical roles and skills this phase authored -
+   * they are somebody else's assertions, retained separately so a mapping
+   * between the two is a reviewable artefact rather than an overwrite.
+   */
+  async marketOccupations(limit?: number, language?: string) {
+    const terms = await this.prisma.marketTaxonomyTerm.findMany({
+      where: {
+        kind: 'OCCUPATION',
+        ...(language === undefined ? {} : { language }),
+        datasetVersion: { source: { mayRedistributeDerived: true } },
+      },
+      orderBy: [{ externalCode: 'asc' }, { label: 'asc' }],
+      take: clampLimit(limit),
+      select: {
+        externalCode: true,
+        label: true,
+        language: true,
+        parentCode: true,
+        datasetVersion: {
+          select: {
+            datasetKey: true,
+            version: true,
+            attribution: true,
+            source: { select: { slug: true } },
+          },
+        },
+      },
+    });
+
+    return { data: terms };
+  }
 }

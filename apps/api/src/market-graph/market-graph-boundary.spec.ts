@@ -330,6 +330,8 @@ describe('what a purge may not quietly make easier', () => {
     }
 
     expect(actions.sort()).toEqual([
+      'MarketAggregateObservation.datasetVersion: Cascade',
+      'MarketDatasetVersion.source: Restrict',
       'MarketIngestionRun.source: Restrict',
       'MarketPosting.source: Restrict',
       'MarketPostingNormalization.role: Restrict',
@@ -352,6 +354,7 @@ describe('what a purge may not quietly make easier', () => {
       'MarketSignal.skill: Restrict',
       'MarketSkill.supersededBy: Restrict',
       'MarketSkillAlias.skill: Restrict',
+      'MarketTaxonomyTerm.datasetVersion: Cascade',
     ]);
   });
 
@@ -369,7 +372,17 @@ describe('what a purge may not quietly make easier', () => {
       .filter((entry) => entry.isDirectory() && entry.name.includes('market'))
       .map((entry) => entry.name);
 
-    expect(migrations).toEqual(['20260908120000_add_market_graph_foundation']);
+    expect(migrations).toEqual([
+      '20260908120000_add_market_graph_foundation',
+      /*
+       * The second migration, added deliberately. Taxonomy terms and
+       * aggregate statistics are not observed postings, and forcing them
+       * into MarketPosting would mean inventing observations nobody made.
+       * The extension is three source-neutral models, not one table per
+       * source.
+       */
+      '20260908201948_add_market_dataset_evidence',
+    ]);
   });
 });
 

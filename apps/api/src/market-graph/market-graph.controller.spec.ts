@@ -44,6 +44,8 @@ function stubService(): MarketGraphService {
     })),
     roleVolumes: vi.fn(async () => ({ data: { window: WINDOW, signals: [] } })),
     explainSignal: vi.fn(async () => ({ data: {} })),
+    marketStatistics: vi.fn(async () => ({ data: [] })),
+    marketOccupations: vi.fn(async () => ({ data: [] })),
     unresolvedTitles: vi.fn(async () => ({ data: [] })),
   } as unknown as MarketGraphService;
 }
@@ -108,6 +110,8 @@ const ROUTES: Array<[string, string]> = [
    * that walks provenance and now carries a freshness verdict.
    */
   ['get', '/v1/market/signals/00000000-0000-4000-8000-000000000000'],
+  ['get', '/v1/market/statistics'],
+  ['get', '/v1/market/occupations'],
   ['get', '/v1/market/unresolved-titles'],
 ];
 
@@ -167,6 +171,7 @@ describe('the route table', () => {
       .sort();
 
     expect(paths).toEqual([
+      'GET /v1/market/occupations',
       'GET /v1/market/roles',
       'GET /v1/market/roles/:slug/skills',
       'GET /v1/market/signals',
@@ -174,6 +179,7 @@ describe('the route table', () => {
       'GET /v1/market/skills',
       'GET /v1/market/snapshot',
       'GET /v1/market/sources',
+      'GET /v1/market/statistics',
       'GET /v1/market/unresolved-titles',
     ]);
   });

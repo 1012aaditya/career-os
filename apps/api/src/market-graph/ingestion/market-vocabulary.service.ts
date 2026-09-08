@@ -41,6 +41,46 @@ export class MarketVocabularyService {
    * projecting the ruleset - so the vocabulary layer carried one source's
    * legal position as a code literal.
    */
+  /**
+   * The MarketSource row for a published DATASET rather than a job board.
+   *
+   * Same row, same licence columns, different kind - so purge, licence
+   * enforcement and the read side all keep working unchanged. The empty
+   * update block is kept for the same reason as above: an operator's
+   * decision to disable a source must survive a deploy.
+   *
+   * identityBasis is SOURCE_ID because a dataset row is identified by the
+   * publisher's own code, and the column is required. It is never used to
+   * mint a posting externalId, because datasets produce no postings.
+   */
+  async ensureDatasetSource(descriptor: {
+    slug: string;
+    displayName: string;
+    licenceBasis:
+      'EXPLICIT_GRANT' | 'UNADDRESSED_PUBLIC_ENDPOINT' | 'CONTRACTED';
+    licenceNote: string;
+    licenceReviewedAt: Date;
+    isEnabled: boolean;
+    mayRedistributeDerived: boolean;
+  }): Promise<{ id: string; slug: string }> {
+    return this.prisma.marketSource.upsert({
+      where: { slug: descriptor.slug },
+      update: {},
+      create: {
+        slug: descriptor.slug,
+        displayName: descriptor.displayName,
+        kind: 'SKILL_TAXONOMY',
+        identityBasis: 'SOURCE_ID',
+        licenceBasis: descriptor.licenceBasis,
+        licenceNote: descriptor.licenceNote,
+        licenceReviewedAt: descriptor.licenceReviewedAt,
+        isEnabled: descriptor.isEnabled,
+        mayRedistributeDerived: descriptor.mayRedistributeDerived,
+      },
+      select: { id: true, slug: true },
+    });
+  }
+
   async ensureSource(descriptor: SourceDescriptor): Promise<{
     id: string;
     slug: string;

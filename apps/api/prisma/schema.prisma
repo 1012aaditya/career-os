@@ -433,18 +433,16 @@ model EvidenceAchievement {
   @@index([achievementId])
 }
 
-/*
+/**
  * ------------------------------------------------------------------
  * EXTERNAL EVIDENCE LAYER (Phase 7)
  * ------------------------------------------------------------------
- *
  * These three tables are additive. Nothing above them changes, and in
  * particular CareerGraphIngestion is left exactly as it is: it is keyed to
  * a ResumeImport by a NOT NULL foreign key, and widening that to carry a
  * source with entirely different semantics - a resume is confirmed once, a
  * connection is re-synced forever - would weaken a live invariant to serve
  * a case that a new table serves without touching anything.
- *
  * See docs/external-evidence/phase-7-0-decisions.md.
  */
 
@@ -463,15 +461,14 @@ model ExternalConnection {
 
   /// The provider's immutable numeric account id, held as text so a
   /// provider whose ids are not numeric can reuse this table.
-  externalAccountId String
+  externalAccountId    String
   /// Display only. Mutable at the provider; never used as a lookup key.
   externalAccountLogin String
 
-  /*
+  /**
    * Token material. Nullable because not every provider is
    * credential-bearing: a PORTFOLIO connection is a public URL and holds
    * no token at all.
-   *
    * Encrypted with AES-256-GCM. The AAD binds each ciphertext to the user
    * that owns it, so a row copied into another user's record fails to
    * decrypt rather than silently working - without that, anyone able to
@@ -543,7 +540,7 @@ model OAuthAuthorizationRequest {
   /// The scope string actually sent. Always sent explicitly: omitting it
   /// makes the provider grant every scope the user ever approved for this
   /// application.
-  scope String
+  scope       String
 
   expiresAt  DateTime
   /// Set by an atomic compare-and-swap. A second consumption is an attack
@@ -582,28 +579,24 @@ model ExternalSyncRun {
   @@index([userId])
 }
 
-/*
+/**
  * ---------------------------------------------------------------------
  * PHASE 8 - MARKET GRAPH
  * ---------------------------------------------------------------------
- *
  * The Career Graph above answers "what does this person know and have
  * evidence for". Everything below answers a different question - "what are
  * employers currently advertising" - and the two must not be able to
  * answer each other's.
- *
  * Advertising, deliberately, and not "demand". A posting is an
  * advertisement: evergreen pipeline reqs, roles already filled internally,
  * and one requisition advertised in three cities are all postings and none
  * of them is an opening. Naming the thing we actually observe is what
  * stops a demandIndex column growing here later.
- *
  * Every model here is additive and prefixed Market. Nothing above is
  * altered: no column added, no constraint changed, no row read or
  * rewritten. The prefix is load-bearing rather than cosmetic - it makes
  * "did Phase 8 touch a frozen table?" answerable by grep instead of by
  * review.
- *
  * NOTHING here has a foreign key into User, Skill, UserSkill, Experience,
  * Project or Evidence. That absence IS the phase boundary between market
  * observation and the Opportunity Engine, and a test fails if a relation
@@ -613,7 +606,6 @@ model ExternalSyncRun {
  * take an index lock held to commit - so a background market ingest
  * writing there would both serialise against live resume imports and
  * silently edit users' career graphs.
- *
  * See docs/market-graph/phase-8-0-decisions.md.
  */
 
@@ -747,13 +739,13 @@ model MarketSource {
   /// artifact would still be machine-local.
   slug String @unique
 
-  displayName String
-  kind        MarketSourceKind    @default(JOB_BOARD)
+  displayName   String
+  kind          MarketSourceKind    @default(JOB_BOARD)
   /// The best identity this source can support. Changing it is an adapter
   /// version bump, never a silent re-keying of existing rows.
   identityBasis MarketIdentityBasis @default(SOURCE_ID)
 
-  licenceBasis MarketLicenceBasis
+  licenceBasis      MarketLicenceBasis
   /// What was actually read, and when. Without these,
   /// EXPLICIT_GRANT and CONTRACTED are assertions rather than findings.
   licenceNote       String?
@@ -783,7 +775,7 @@ model MarketSource {
   /// Feeds the FRESH threshold at two intervals, so one missed run does
   /// not flip a healthy posting. A statement about our sampling, not about
   /// the job market, which is why it needs no market evidence.
-  pollIntervalHours Int @default(24)
+  pollIntervalHours           Int @default(24)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -791,6 +783,7 @@ model MarketSource {
   runs          MarketIngestionRun[]
   postings      MarketPosting[]
   scopeCoverage MarketRunScopeCoverage[]
+  datasets      MarketDatasetVersion[]
 }
 
 /// One row per ingestion attempt. The source-generic ledger, modelled on
@@ -824,8 +817,8 @@ model MarketIngestionRun {
   queryParams      Json
   queryFingerprint String
 
-  startedAt  DateTime
-  finishedAt DateTime?
+  startedAt   DateTime
+  finishedAt  DateTime?
   /// A short, already-sanitized code. Callers pass a reason, never a
   /// caught error.
   errorReason String?
@@ -833,9 +826,9 @@ model MarketIngestionRun {
   /// derived from MarketRunScopeCoverage rows, because a status derived
   /// from a caller-supplied block is only as good as the caller, and the
   /// caller is the code most motivated to believe its run went well.
-  stats Json?
+  stats       Json?
 
-  source        MarketSource            @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  source        MarketSource             @relation(fields: [sourceId], references: [id], onDelete: Restrict)
   scopeCoverage MarketRunScopeCoverage[]
   sightings     MarketPostingSighting[]
   versions      MarketPostingVersion[]
@@ -867,9 +860,9 @@ model MarketRunScopeCoverage {
 
   /// We intended to read it. Always true today; a source that discovers
   /// its own scopes could record one it found but chose not to read.
-  requested Boolean @default(true)
+  requested        Boolean @default(true)
   /// The fetch completed and we know what is in this scope.
-  read Boolean
+  read             Boolean
   /// Everything in the scope was read, not just some pages of it.
   ///
   /// A 404 sets this false, NOT "read, zero postings". The 404 body is
@@ -916,13 +909,13 @@ model MarketPosting {
   identityBasis   MarketIdentityBasis
   identityVersion Int
   /// The source's own key, verbatim.
-  externalKey String
+  externalKey     String
   /// The sub-scope within the source this posting was found in: a board
   /// token for an ATS, a country for an aggregator, '*' for a source with
   /// no sub-scope. Part of identity, so a source's scope DEFINITION is
   /// frozen at first ingest - changing it is an identityVersion bump with
   /// an expected, labelled split, not a silent re-keying.
-  sourceScope String
+  sourceScope     String
 
   /// The grouping the SOURCE itself asserts, where it asserts one.
   ///
@@ -942,7 +935,7 @@ model MarketPosting {
   /// actually inserted. Never advanced by a migration, a backfill or a
   /// re-normalization - that is the whole anti-fabrication rule, and
   /// Phase 7 has already been bitten by its violation.
-  lastSeenAt DateTime
+  lastSeenAt  DateTime
 
   /// Denormalized for cross-source work that Phase 8 deliberately does not
   /// do. Stored now because a source deletes its postings and the future
@@ -997,14 +990,14 @@ model MarketPostingVersion {
   /// a recruiter touches a req, with the advertised text byte-identical,
   /// and a 20KB version per internal edit is not a record of the market.
   /// The source's claim is kept per-observation on the sighting instead.
-  contentHash String
+  contentHash        String
 
   firstSeenRunId String   @db.Uuid
   firstSeenAt    DateTime
 
-  titleRaw    String
-  companyRaw  String?
-  locationRaw String?
+  titleRaw                String
+  companyRaw              String?
+  locationRaw             String?
   /// Verbatim, HTML and all. Never tidied - the cleaned form lives on the
   /// normalization row, which is versioned and re-derivable. This is not.
   descriptionRaw          String?
@@ -1013,18 +1006,18 @@ model MarketPostingVersion {
   /// The source's claims about time, never ours. Null means the source did
   /// not say - never now(), never a sibling field. An invented date is
   /// worse than an absent one.
-  sourcePublishedAt DateTime?
+  sourcePublishedAt  DateTime?
   /// The source's claim AS OF THE OBSERVATION THAT FIRST PRODUCED THIS
   /// CONTENT. It is not refreshed, because this row is immutable; the
   /// current claim is on the latest sighting.
-  sourceUpdatedAt DateTime?
+  sourceUpdatedAt    DateTime?
   /// Would be the ideal freshness input - it is the employer's own stated
   /// expiry rather than our guess. Greenhouse returned null for it on all
   /// 864 postings sampled, so it is parsed and stored and NOTHING depends
   /// on it being present.
   sourceValidThrough DateTime?
 
-  applyUrlRaw String?
+  applyUrlRaw         String?
   /// The source's own taxonomy labels, verbatim and unmapped.
   ///
   /// An array because the sources have arrays: Greenhouse returns
@@ -1077,7 +1070,7 @@ model MarketPostingSighting {
   /// Denormalized from the run so that (observedAt, runSeq) is a total
   /// order over a posting's sightings without a join. Millisecond
   /// timestamps tie; this is what breaks the tie reproducibly.
-  runSeq Int
+  runSeq     Int
 
   /// What the source claimed about its own last update AT THIS
   /// OBSERVATION. Deliberately here rather than only on the version:
@@ -1127,8 +1120,8 @@ model MarketRole {
   introducedInRulesetVersion Int
   /// Roles are never deleted. A retired role keeps its id so historical
   /// signals still resolve; new resolutions route elsewhere.
-  deprecatedAt   DateTime?
-  supersededById String?   @db.Uuid
+  deprecatedAt               DateTime?
+  supersededById             String?   @db.Uuid
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1178,8 +1171,8 @@ model MarketSkill {
 /// recorded on MarketPostingNormalization, which is frozen - so correcting
 /// a rule tomorrow does not retroactively change what we decided today.
 model MarketRoleAlias {
-  id             String @id @default(uuid()) @db.Uuid
-  rulesetVersion Int
+  id              String @id @default(uuid()) @db.Uuid
+  rulesetVersion  Int
   /// The lookup key, already NFKC-folded and casefolded.
   aliasNormalized String
   roleId          String @db.Uuid
@@ -1244,7 +1237,7 @@ model MarketPostingNormalization {
 
   companyNormalized String?
   /// Entity-unescaped, tag-stripped, whitespace-collapsed body text.
-  descriptionText String?
+  descriptionText   String?
 
   skillExtractionStatus MarketSkillExtractionStatus
   /// canonicalHash of everything this row asserts, INCLUDING its skill
@@ -1253,7 +1246,7 @@ model MarketPostingNormalization {
   /// the unique constraint: a unique violation says "a row exists", not
   /// "the normalizer is deterministic", and mentions live in another table
   /// where a hash over this row alone would never notice them.
-  outputHash String
+  outputHash            String
 
   normalizedAt DateTime
 
@@ -1301,15 +1294,15 @@ model MarketPostingSkillMention {
   normalizationId String @db.Uuid
   /// Always equal to the parent's, and enforced by a composite foreign key
   /// rather than by convention. See the note on the parent's @@unique.
-  rulesetVersion Int
+  rulesetVersion  Int
 
   /// The exact source string. Never null, never tidied.
   rawTerm        String
   termNormalized String
   /// Null = observed but unmapped. Not "no skill". A CHECK ties this to
   /// matchMethod.
-  skillId String? @db.Uuid
-  aliasId String? @db.Uuid
+  skillId        String? @db.Uuid
+  aliasId        String? @db.Uuid
 
   matchMethod   MarketTermMatchMethod
   extractedFrom MarketTermLocus
@@ -1373,7 +1366,7 @@ model MarketSignalRun {
   finishedAt DateTime?
   /// Exclusion and suppression counts, so the gap between what was
   /// observed and what was published is visible.
-  stats Json?
+  stats      Json?
 
   signals MarketSignal[]
 
@@ -1401,7 +1394,7 @@ model MarketSignal {
   runId      String           @db.Uuid
   signalType MarketSignalType
 
-  roleId String @db.Uuid
+  roleId  String  @db.Uuid
   /// Null for ROLE_POSTING_VOLUME. Postgres treats NULLs as DISTINCT, so
   /// this column cannot appear in an @@unique - two partial unique indexes
   /// are created in the migration instead.
@@ -1415,8 +1408,8 @@ model MarketSignal {
   /// observed postings that were this role". Setting denominator equal to
   /// numerator would make any generic renderer display every volume as
   /// 100%, and would not roll up.
-  numeratorCount   Int
-  denominatorCount Int
+  numeratorCount       Int
+  denominatorCount     Int
   /// How concentrated the sample is. Counts distinct
   /// MarketPostingNormalization.companyNormalized at this run's ruleset
   /// version - never the un-versioned copy on MarketPosting. 1 means this
@@ -1433,9 +1426,9 @@ model MarketSignal {
   sourceScopeKey     String
   /// NONE in Phase 8: cross-source postings are not collapsed, so these
   /// count POSTINGS, never "jobs" or "openings".
-  dedupeMethod     MarketDedupeMethod
-  coverageComplete Boolean
-  computedAt       DateTime
+  dedupeMethod       MarketDedupeMethod
+  coverageComplete   Boolean
+  computedAt         DateTime
 
   run   MarketSignalRun @relation(fields: [runId], references: [id], onDelete: Cascade)
   role  MarketRole      @relation(fields: [roleId], references: [id], onDelete: Restrict)
@@ -1444,4 +1437,140 @@ model MarketSignal {
   @@index([runId, signalType])
   @@index([roleId, signalType])
   @@index([skillId])
+}
+
+/// Which class of evidence a dataset carries.
+///
+/// The Market Graph has two irreconcilable shapes. A POSTING is one
+/// employer advertising one job, observed by us at a moment we can name.
+/// A TAXONOMY term and an AGGREGATE statistic are neither - they are
+/// published assertions by an institution about a population, and forcing
+/// them into MarketPosting would mean inventing observations that were
+/// never made. "47,000 vacancies registered in 2023" is not 47,000 rows.
+enum MarketDatasetKind {
+  TAXONOMY
+  AGGREGATE
+}
+
+/// What a taxonomy term denotes.
+enum MarketTermKind {
+  OCCUPATION
+  ALTERNATE_TITLE
+  SKILL
+  TECHNOLOGY
+  INDUSTRY
+}
+
+/// One released version of one dataset from one source.
+///
+/// The unit of provenance for everything in Class B, and the reason there
+/// is no table per source: O*NET 31.0, NOC 2021 v1.0, BLS JOLTS and
+/// StatCan 14-10-0444 are all rows here, distinguished by data rather than
+/// by schema.
+///
+/// Version is the freshness carrier. A taxonomy has no observedAt - it was
+/// not seen, it was published - so "how current is this?" is answered by
+/// releasedAt and by whether a newer version exists, never by when we
+/// happened to import it.
+model MarketDatasetVersion {
+  id       String            @id @default(uuid()) @db.Uuid
+  sourceId String            @db.Uuid
+  kind     MarketDatasetKind
+
+  /// Stable key for the dataset within its source: "onet", "noc",
+  /// "jolts", "14-10-0444". Authored, never derived from a label.
+  datasetKey String
+  /// The publisher's own version string, verbatim: "31.0", "2021-v1.0".
+  version    String
+
+  /// When the PUBLISHER released it. Null when the publisher states none.
+  releasedAt  DateTime?
+  /// When WE fetched it. Deliberately separate: importing today does not
+  /// make a 2023 release current, and conflating the two is the exact
+  /// fabrication the posting side already forbids.
+  retrievedAt DateTime
+
+  /// canonicalHash of the parsed rows, so a re-import of the same
+  /// published version is provably the same bytes.
+  contentHash String
+  rowCount    Int
+
+  /// The attribution string this dataset obliges us to display, stored
+  /// with the data rather than in a document, because an obligation that
+  /// lives only in documentation is one nobody renders.
+  attribution String
+
+  createdAt DateTime @default(now())
+
+  source       MarketSource                 @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  terms        MarketTaxonomyTerm[]
+  observations MarketAggregateObservation[]
+
+  @@unique([sourceId, datasetKey, version])
+  @@index([sourceId, datasetKey, releasedAt])
+}
+
+/// One term from a taxonomy dataset, exactly as the publisher states it.
+///
+/// Deliberately NOT merged into MarketRole/MarketSkill. Those are the
+/// canonical vocabulary this phase authored and controls; these are
+/// somebody else's assertions, retained separately so a mapping between
+/// them is a reviewable artefact rather than an overwrite. Blindly
+/// replacing the canonical vocabulary with 44,779 O*NET titles would
+/// destroy every signal already computed against it.
+model MarketTaxonomyTerm {
+  id               String         @id @default(uuid()) @db.Uuid
+  datasetVersionId String         @db.Uuid
+  kind             MarketTermKind
+
+  /// The publisher's own code: "15-1252.00", "21231". A STRING, because
+  /// NOC codes carry significant leading zeros.
+  externalCode String
+  label        String
+  /// BCP-47. NOC publishes the same code in en and fr.
+  language     String
+  /// The publisher's own parent code, for hierarchies. Never inferred.
+  parentCode   String?
+
+  datasetVersion MarketDatasetVersion @relation(fields: [datasetVersionId], references: [id], onDelete: Cascade)
+
+  @@unique([datasetVersionId, kind, externalCode, label, language])
+  @@index([datasetVersionId, kind])
+  @@index([externalCode])
+}
+
+/// One statistical cell, as published.
+///
+/// value is a STRING and that is deliberate. These numbers are published
+/// by a statistical agency and we must reproduce them exactly; storing
+/// 104.3 as a float introduces representation error into a figure we did
+/// not compute and cannot recompute. The string is what BLS said. Any
+/// arithmetic is the reader's, at the point of use, with the unit in hand.
+model MarketAggregateObservation {
+  id               String @id @default(uuid()) @db.Uuid
+  datasetVersionId String @db.Uuid
+
+  /// The publisher's series or table identifier, verbatim.
+  seriesKey String
+  /// Publisher's own geography code or label. Not normalized to ours.
+  geography String
+  /// Publisher's occupation/industry code, when the series carries one.
+  category  String?
+
+  /// The period the observation DESCRIBES, which is not when it was
+  /// released and not when we fetched it.
+  periodStart DateTime
+  periodEnd   DateTime
+  /// "MONTH", "QUARTER", "YEAR", "WEEK" - the publisher's own cadence.
+  periodType  String
+
+  metric String
+  value  String
+  unit   String
+
+  datasetVersion MarketDatasetVersion @relation(fields: [datasetVersionId], references: [id], onDelete: Cascade)
+
+  @@unique([datasetVersionId, seriesKey, geography, category, periodStart, metric])
+  @@index([datasetVersionId, seriesKey])
+  @@index([periodStart])
 }

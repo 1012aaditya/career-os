@@ -83,6 +83,19 @@ export class MarketGraphController {
     return this.marketGraph.roleVolumes(parseLimit(limit), source);
   }
 
+  @Get('statistics')
+  marketStatistics(@Query('limit') limit?: string) {
+    return this.marketGraph.marketStatistics(parseLimit(limit));
+  }
+
+  @Get('occupations')
+  marketOccupations(
+    @Query('limit') limit?: string,
+    @Query('language') language?: string,
+  ) {
+    return this.marketGraph.marketOccupations(parseLimit(limit), language);
+  }
+
   @Get('signals/:id')
   explainSignal(@Param('id') id: string) {
     /*

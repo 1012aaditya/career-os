@@ -5,6 +5,8 @@ import { MarketVocabularyService } from './ingestion/market-vocabulary.service.j
 import { MarketGraphCoreModule } from './market-graph-core.module.js';
 import { MarketNormalizationService } from './normalization/market-normalization.service.js';
 import { MarketSignalService } from './signals/market-signal.service.js';
+import { MarketDatasetRegistry } from './datasets/dataset-registry.js';
+import { MarketDatasetService } from './datasets/market-dataset.service.js';
 import { MarketSourcePurgeService } from './sources/market-source-purge.service.js';
 import { MarketSourceRegistry } from './sources/source-registry.js';
 
@@ -71,6 +73,32 @@ async function main(): Promise<void> {
             identityBasis: descriptor.adapter.identityBasis,
           }),
         );
+      }
+
+      return;
+    }
+
+    if (command === 'dataset') {
+      const registry2 = app.get(MarketDatasetRegistry);
+      const slugs =
+        sourceSlug === undefined || sourceSlug === 'all'
+          ? registry2.descriptors().map((d) => d.slug)
+          : [sourceSlug];
+
+      for (const slug of slugs) {
+        const descriptor = registry2.get(slug);
+
+        /*
+         * The MarketSource row carries the licence position, so it is
+         * written before any data lands rather than after.
+         */
+        await app.get(MarketVocabularyService).ensureDatasetSource(descriptor);
+
+        const result = await app
+          .get(MarketDatasetService)
+          .import(descriptor.dataset, new Date());
+
+        console.log('[dataset]', JSON.stringify(result));
       }
 
       return;

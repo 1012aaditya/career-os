@@ -42,6 +42,7 @@ export async function createMarketTestContext(): Promise<INestApplicationContext
 export async function truncateMarket(prisma: PrismaService): Promise<void> {
   await prisma.$executeRawUnsafe(`
     TRUNCATE TABLE
+      "MarketPostingSearchDocument",
       "MarketSignal", "MarketSignalRun",
       "MarketPostingSkillMention", "MarketPostingNormalization",
       "MarketPostingSighting", "MarketPostingVersion", "MarketPosting",
@@ -57,6 +58,15 @@ export type PostingSpec = {
   sourceSlug: string;
   scope: string;
   company: string;
+  /* Search needs control over the text it searches. All optional, so every
+   * fixture written before Market Graph search still means what it meant. */
+  titleRaw?: string;
+  titleNormalized?: string;
+  locationRaw?: string;
+  applyUrl?: string;
+  /** The source's own grouping assertion, for dedup tests. */
+  externalGroupKey?: string;
+  sourcePublishedAt?: Date;
   /** One entry per version, in the order they were first seen. */
   versions: Array<{
     observedAt: Date;
@@ -230,6 +240,8 @@ export class MarketFixture {
         sourceScope: spec.scope,
         companyRaw: spec.company,
         companyNormalized: spec.company,
+        externalGroupKey: spec.externalGroupKey ?? null,
+        applyUrlCanonical: spec.applyUrl ?? null,
         firstSeenAt: first.observedAt,
         lastSeenAt: last.observedAt,
       },
@@ -247,7 +259,13 @@ export class MarketFixture {
           contentHash: `${spec.key}-v${index}`,
           firstSeenRunId: runId,
           firstSeenAt: version.observedAt,
-          titleRaw: `${spec.key} title v${index}`,
+          titleRaw: spec.titleRaw ?? `${spec.key} title v${index}`,
+          /* The AUTHORITATIVE employer name. MarketPosting.companyRaw is
+           * explicitly a lookup accelerator, so anything reading a
+           * company for display must read it from the version. */
+          companyRaw: spec.company,
+          locationRaw: spec.locationRaw ?? null,
+          sourcePublishedAt: spec.sourcePublishedAt ?? null,
           descriptionCompleteness: version.completeness ?? 'FULL',
           rawPayload: {},
           rawPayloadHash: `${spec.key}-raw-v${index}`,
@@ -272,7 +290,10 @@ export class MarketFixture {
           data: {
             versionId: row.id,
             rulesetVersion: version.rulesetVersion ?? this.rulesetVersion,
-            titleNormalized: `${spec.key} title`,
+            titleNormalized:
+              spec.titleNormalized ??
+              spec.titleRaw?.toLowerCase() ??
+              `${spec.key} title`,
             roleId:
               version.roleSlug === null
                 ? null

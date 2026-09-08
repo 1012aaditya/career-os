@@ -953,9 +953,11 @@ model MarketPosting {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  source    MarketSource            @relation(fields: [sourceId], references: [id], onDelete: Restrict)
-  versions  MarketPostingVersion[]
-  sightings MarketPostingSighting[]
+  source         MarketSource                 @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  versions       MarketPostingVersion[]
+  sightings      MarketPostingSighting[]
+  /// At most one. Derived, and rebuilt rather than edited.
+  searchDocument MarketPostingSearchDocument?
 
   @@index([sourceId, sourceScope])
   @@index([sourceId, firstSeenAt])
@@ -1036,7 +1038,7 @@ model MarketPostingVersion {
   /// A taxonomy name, never a source name - stored with the observation
   /// because normalization must be able to read a code's scheme without
   /// learning which source supplied it.
-  occupationScheme String?
+  occupationScheme    String?
 
   /// The source's response for this posting, preserved. NOT NULL: without
   /// it nothing is reproducible once the source deletes the posting, and a
@@ -1046,10 +1048,11 @@ model MarketPostingVersion {
 
   createdAt DateTime @default(now())
 
-  posting        MarketPosting                @relation(fields: [postingId], references: [id], onDelete: Cascade)
-  firstSeenRun   MarketIngestionRun           @relation(fields: [firstSeenRunId], references: [id], onDelete: Restrict)
-  sightings      MarketPostingSighting[]
-  normalizations MarketPostingNormalization[]
+  posting         MarketPosting                 @relation(fields: [postingId], references: [id], onDelete: Cascade)
+  firstSeenRun    MarketIngestionRun            @relation(fields: [firstSeenRunId], references: [id], onDelete: Restrict)
+  sightings       MarketPostingSighting[]
+  normalizations  MarketPostingNormalization[]
+  searchDocuments MarketPostingSearchDocument[]
 
   @@unique([postingId, contentHashVersion, contentHash])
   @@index([postingId])
@@ -1579,4 +1582,145 @@ model MarketAggregateObservation {
   @@unique([datasetVersionId, seriesKey, geography, category, periodStart, metric])
   @@index([datasetVersionId, seriesKey])
   @@index([periodStart])
+}
+
+/// One row per posting, holding everything Market Search reads.
+///
+/// A DERIVED PROJECTION over frozen Phase 8/9 evidence, in the same family
+/// as MarketSignal: it asserts nothing the underlying tables do not
+/// already say, it is rebuilt rather than edited, and deleting every row
+/// costs only the time to rebuild them. Search never writes here and never
+/// writes anywhere else.
+///
+/// It exists because the schema genuinely cannot serve search without it,
+/// not to make a query tidier. Three reasons, each measured on the current
+/// corpus:
+///
+///   1. There is no "current version" pointer anywhere. A posting's
+///      readable content lives on MarketPostingVersion, its role on
+///      MarketPostingNormalization at a ruleset version, and its skills on
+///      MarketPostingSkillMention one level below that. Ranking a page of
+///      results without this table means a window function over 76,968
+///      versions joined to two more tables, per request.
+///   2. Ranking has to happen in the database. Fetching candidates and
+///      scoring them in the application is the N+1 that section 19
+///      forbids, and it makes deterministic keyset pagination impossible
+///      because page 2 cannot know what page 1 scored.
+///   3. Tokens have to be indexable. The tokenizer is Phase 9's, in
+///      TypeScript, and Postgres cannot call it - so the tokens are
+///      computed once here and GIN-indexed, rather than recomputed per
+///      request or approximated by a LIKE scan.
+///
+/// Every column is a copy of something already stored. The one thing this
+/// table adds is the ARRANGEMENT.
+model MarketPostingSearchDocument {
+  /// The posting this describes. Also the primary key: exactly one
+  /// document per posting, so a rebuild cannot silently double a corpus.
+  postingId String @id @db.Uuid
+
+  /// Which projection ruleset built this row. Separate from
+  /// rulesetVersion because they change for different reasons: adding a
+  /// ranking token changes the projection and leaves normalization alone.
+  projectionVersion Int
+  /// The normalization ruleset this row READ. Recorded so a document
+  /// built against a superseded ruleset is identifiable rather than
+  /// merely stale-looking.
+  rulesetVersion    Int
+
+  /// Denormalized so a source filter needs no join. Not authoritative -
+  /// MarketPosting.sourceId is - and never counted from.
+  sourceId    String @db.Uuid
+  sourceSlug  String
+  /// The sub-scope this posting was found in, copied from MarketPosting.
+  ///
+  /// Here because freshness needs it. The coverage gate asks "has a
+  /// COMPLETE read of THIS posting's scope finished since we last saw
+  /// it", and that question cannot be answered per source: a run that
+  /// completely read four boards and was rate-limited on the fifth
+  /// leaves postings on the fifth whose absence is our failure rather
+  /// than their disappearance.
+  sourceScope String
+
+  /// Which version's content this row projected.
+  versionId String @db.Uuid
+
+  /// The posting's opaque market identity, copied verbatim.
+  ///
+  /// The pagination tie-breaker, and the reason it is here rather than
+  /// joined: it is unique, total, and identical in dev, CI and
+  /// production, which the uuid primary key is not. An ordering broken by
+  /// a uuid would reproduce in-process and differ between environments.
+  externalId String
+
+  titleRaw        String
+  titleNormalized String
+  /// Phase 9's tokenizer, applied once. Never recomputed at read time.
+  titleTokens     String[]
+
+  companyRaw        String?
+  companyNormalized String?
+
+  /// Free text, and city-level on five of six sources. There is no
+  /// location taxonomy here and deliberately none: see the note in
+  /// search/search-ruleset.ts.
+  locationRaw        String?
+  locationNormalized String?
+  locationTokens     String[]
+
+  /// The canonical role, as Phase 9 resolved it. Null on 41% of the
+  /// corpus, which is a fact about the vocabulary and not a defect here -
+  /// a null role means the posting is findable by title and not by role.
+  roleSlug String?
+
+  /// Canonical skills mentioned, sorted. Empty on 96% of postings,
+  /// because only 13,164 postings carry a description at all.
+  skillSlugs String[]
+
+  /// Every token a free-text query may match: title, company, location,
+  /// role label and skill labels.
+  ///
+  /// Description text is deliberately NOT here. It exists on 13,164 of
+  /// 76,968 postings, all of them on three of the six sources, so
+  /// indexing it would rank a JobTech posting above an identically
+  /// relevant Canada Job Bank one for no reason a reader could see - a
+  /// systematic bias caused by which publisher happens to ship a body.
+  searchTokens String[]
+
+  /// The publisher's claims about time, copied. Never our retrieval time:
+  /// a posting fetched today is not newer than one published yesterday.
+  sourcePublishedAt  DateTime?
+  sourceValidThrough DateTime?
+  firstSeenAt        DateTime
+  lastSeenAt         DateTime
+
+  applyUrl String?
+
+  /// The source's OWN grouping assertion, copied from
+  /// MarketPosting.externalGroupKey.
+  ///
+  /// Search-time grouping uses (sourceId, groupKey) and nothing else. It
+  /// is never inferred from titles, companies or descriptions, because a
+  /// grouping we infer is a merge of two jobs we cannot tell apart.
+  groupKey String?
+
+  /// canonicalHash of everything this row asserts. Re-projecting must
+  /// reproduce it, which is what makes a rebuild idempotent rather than
+  /// merely repeatable.
+  contentHash String
+  projectedAt DateTime
+
+  posting MarketPosting        @relation(fields: [postingId], references: [id], onDelete: Cascade)
+  version MarketPostingVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  @@index([sourceSlug])
+  @@index([roleSlug])
+  @@index([companyNormalized])
+  @@index([sourcePublishedAt])
+  @@index([lastSeenAt])
+  @@index([sourceId, groupKey])
+  @@index([versionId])
+  @@index([searchTokens], type: Gin)
+  @@index([titleTokens], type: Gin)
+  @@index([locationTokens], type: Gin)
+  @@index([skillSlugs], type: Gin)
 }

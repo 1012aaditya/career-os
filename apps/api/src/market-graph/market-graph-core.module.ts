@@ -15,6 +15,8 @@ import { MarketVocabularyService } from './ingestion/market-vocabulary.service.j
 import { MarketGraphService } from './market-graph.service.js';
 import { MarketLegacySanitizerService } from './observations/market-legacy-sanitizer.service.js';
 import { MarketNormalizationService } from './normalization/market-normalization.service.js';
+import { MarketSearchProjectionService } from './search/market-search-projection.service.js';
+import { MarketSearchService } from './search/market-search.service.js';
 import { MarketSignalService } from './signals/market-signal.service.js';
 import { GreenhouseClient } from './sources/greenhouse/greenhouse.client.js';
 import { JobTechClient } from './sources/jobtech/jobtech.client.js';
@@ -81,6 +83,13 @@ import { UsaJobsHistoricClient } from './sources/usajobs-historic/usajobs-histor
     MarketSignalService,
     MarketGraphService,
     MarketSourcePurgeService,
+    /*
+     * The projection builder and the search reader. Both live here rather
+     * than in the HTTP module so the projection can be rebuilt from the
+     * CLI with no auth stack, exactly like ingestion and signals.
+     */
+    MarketSearchProjectionService,
+    MarketSearchService,
   ],
   exports: [
     MarketLegacySanitizerService,
@@ -93,6 +102,8 @@ import { UsaJobsHistoricClient } from './sources/usajobs-historic/usajobs-histor
     MarketNormalizationService,
     MarketSignalService,
     MarketGraphService,
+    MarketSearchProjectionService,
+    MarketSearchService,
   ],
 })
 export class MarketGraphCoreModule {}

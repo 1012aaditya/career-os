@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module.js';
 import { MarketGraphCoreModule } from './market-graph-core.module.js';
 import { MarketGraphController } from './market-graph.controller.js';
+import { MarketSearchController } from './search/market-search.controller.js';
 
 /*
  * The HTTP surface of the Market Graph: one controller, and the auth it
@@ -16,6 +17,6 @@ import { MarketGraphController } from './market-graph.controller.js';
  */
 @Module({
   imports: [MarketGraphCoreModule, AuthModule],
-  controllers: [MarketGraphController],
+  controllers: [MarketGraphController, MarketSearchController],
 })
 export class MarketGraphModule {}

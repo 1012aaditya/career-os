@@ -337,6 +337,21 @@ describe('what a purge may not quietly make easier', () => {
       'MarketPostingNormalization.role: Restrict',
       'MarketPostingNormalization.roleAlias: Restrict',
       'MarketPostingNormalization.version: Cascade',
+      /*
+       * Phase 10, and CASCADE on both rather than RESTRICT.
+       *
+       * Every other edge in this list is RESTRICT because deleting the
+       * row behind it would destroy evidence somebody observed. A search
+       * document is not evidence: it asserts nothing the tables it was
+       * built from do not already say, and losing one costs the time to
+       * rebuild it. So a purge that deletes a posting should take its
+       * document with it rather than be blocked by it - the awkward
+       * ordering the purge service follows is a safety property about
+       * OBSERVATIONS, and adding a derived table to it would buy nothing
+       * and make the purge harder to get right.
+       */
+      'MarketPostingSearchDocument.posting: Cascade',
+      'MarketPostingSearchDocument.version: Cascade',
       'MarketPostingSighting.posting: Cascade',
       'MarketPostingSighting.run: Restrict',
       'MarketPostingSighting.version: Cascade',
@@ -382,6 +397,20 @@ describe('what a purge may not quietly make easier', () => {
        * source.
        */
       '20260908201948_add_market_dataset_evidence',
+      /*
+       * The third, added deliberately in Phase 10. Search needs one
+       * projection table, and it needs it for a reason the query layer
+       * cannot work around: nothing in the schema says which
+       * MarketPostingVersion is a posting's CURRENT one, so every search
+       * would open with a window function over 76,968 version rows joined
+       * to normalization and skill mentions.
+       *
+       * It stores no new fact. Every column is a copy of something
+       * already recorded, arranged so it can be filtered and ordered in
+       * one indexed pass, and both its foreign keys cascade because
+       * losing a row costs a rebuild and nothing else.
+       */
+      '20260909120000_add_market_search_projection',
     ]);
   });
 });
@@ -453,30 +482,138 @@ describe('what the Market Graph may not store or serve', () => {
    * 389. Neither column is in any read select today, and this is what
    * keeps it that way: the protection is a test, not a convention.
    */
-  it('serves no description text and no raw payload from the read side', () => {
+  /*
+   * Phase 8's rule was "serve no description text at all", and it was
+   * enforced by scanning ONE file - whose own comment worried that
+   * splitting the read logic out would leave the check passing over
+   * nothing. Phase 10 split the read logic out. So the scan now covers
+   * the whole module and carries an explicit allowlist, which is the only
+   * form in which "only these files may touch a body" is a control rather
+   * than a habit.
+   *
+   * The rule is NARROWED, not lifted. A job the reader cannot read is not
+   * a search result, so a body may be served - from one file, after
+   * redaction, and the test below checks that file actually redacts.
+   */
+  const BODY_COLUMN_ALLOWLIST = [
+    /* Produces descriptionText. It is the normalizer's output. */
+    'normalization/market-normalization.service.ts',
+    /* The pure normalizer that derives it. Reads no database. */
+    'normalization/normalize.ts',
+    /* Hashes a body into a content identity. Serves nothing. */
+    'observations/posting-identity.ts',
+    /* Rewrites bodies in place to remove contact details. */
+    'observations/market-legacy-sanitizer.service.ts',
+    /* Defines the redaction the ingestion path applies. */
+    'observations/redaction.ts',
+    /* The ONE place a body may leave the Market Graph. */
+    'search/served-description.ts',
+    /* Reads a body and hands it straight to servedDescription. */
+    'search/market-search.service.ts',
+  ];
+
+  /*
+   * The WRITE path, which is a different question.
+   *
+   * An adapter names descriptionRaw because it CONSTRUCTS one from a
+   * publisher's response; the ingestion service names it because it
+   * stores it. Neither serves anything. The rule this test enforces is
+   * about what leaves the system, so the layer that puts a body in is
+   * outside its scope - and saying so explicitly is better than a scan
+   * that quietly happened not to reach it.
+   */
+  const WRITE_PATH_PREFIXES = ['sources/', 'ingestion/'];
+
+  it('serves no description text and no raw payload from any read path', () => {
+    const scanned: string[] = [];
+    const offenders: string[] = [];
+
+    for (const file of sources(MARKET_DIR)) {
+      const relative = file.slice(MARKET_DIR.length);
+
+      if (
+        BODY_COLUMN_ALLOWLIST.includes(relative) ||
+        WRITE_PATH_PREFIXES.some((prefix) => relative.startsWith(prefix))
+      ) {
+        continue;
+      }
+
+      scanned.push(relative);
+
+      const code = stripComments(readFileSync(file, 'utf8'));
+
+      for (const forbidden of [
+        'descriptionRaw',
+        'descriptionText',
+        'rawPayload:',
+      ]) {
+        if (code.includes(forbidden)) {
+          offenders.push(`${relative}: ${forbidden}`);
+        }
+      }
+    }
+
+    /*
+     * Non-vacuity, and it is worth more here than it was: the scan now
+     * covers a directory, so an allowlist typo that swallowed everything
+     * would leave it passing over nothing at all.
+     */
+    expect(scanned.length).toBeGreaterThan(20);
+    expect(scanned).toContain('market-graph.service.ts');
+    expect(scanned).toContain('search/market-search-projection.service.ts');
+
+    expect(offenders).toEqual([]);
+  });
+
+  /*
+   * The other half of the narrowed rule. Allowing one file to read a body
+   * is worth nothing unless that file demonstrably redacts it, and a
+   * string scan is the same control used everywhere else in this file.
+   */
+  it('redacts every body the one permitted file returns', () => {
     const code = stripComments(
       readFileSync(
-        fileURLToPath(new URL('./market-graph.service.ts', import.meta.url)),
+        fileURLToPath(
+          new URL('./search/served-description.ts', import.meta.url),
+        ),
         'utf8',
       ),
     );
 
-    /*
-     * Non-vacuity. The scan names one file, so splitting the read logic
-     * out of it would leave this passing over nothing.
-     */
-    expect(code.length).toBeGreaterThan(2000);
-    expect(code).toContain('explainSignal');
+    expect(code).toContain('redactContactText');
 
-    for (const forbidden of [
-      'descriptionRaw',
-      'descriptionText',
-      'rawPayload:',
-    ]) {
-      expect(`${forbidden}: ${code.includes(forbidden)}`).toBe(
-        `${forbidden}: false`,
-      );
-    }
+    /*
+     * One exported function, one return path, and it returns the
+     * REDACTED value. A second export, or a return of the raw argument,
+     * would let a caller pick the wrong one of a pair.
+     */
+    const exported = [...code.matchAll(/export function (\w+)/g)].map(
+      (match) => match[1],
+    );
+
+    expect(exported).toEqual(['servedDescription']);
+    expect(code).not.toMatch(/return\s+stored\s*;/);
+  });
+
+  /*
+   * And the file that reads the column must hand it straight over. This
+   * is the seam the allowlist opens, so it is the seam that gets pinned.
+   */
+  it('passes the body it reads through the redactor and nowhere else', () => {
+    const code = stripComments(
+      readFileSync(
+        fileURLToPath(
+          new URL('./search/market-search.service.ts', import.meta.url),
+        ),
+        'utf8',
+      ),
+    );
+
+    const reads = [...code.matchAll(/descriptionText/g)];
+
+    /* Named exactly twice: once in the select, once in the read of it. */
+    expect(reads.length).toBe(2);
+    expect(code).toContain('servedDescription(');
   });
 
   /*

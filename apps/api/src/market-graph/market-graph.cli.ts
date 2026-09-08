@@ -5,6 +5,7 @@ import { MarketVocabularyService } from './ingestion/market-vocabulary.service.j
 import { MarketGraphCoreModule } from './market-graph-core.module.js';
 import { MarketLegacySanitizerService } from './observations/market-legacy-sanitizer.service.js';
 import { MarketNormalizationService } from './normalization/market-normalization.service.js';
+import { MarketSearchProjectionService } from './search/market-search-projection.service.js';
 import { MarketSignalService } from './signals/market-signal.service.js';
 import { MarketDatasetRegistry } from './datasets/dataset-registry.js';
 import { MarketDatasetService } from './datasets/market-dataset.service.js';
@@ -23,6 +24,7 @@ import { MarketSourceRegistry } from './sources/source-registry.js';
  * Usage, from apps/api after `pnpm build`:
  *   node dist/market-graph/market-graph.cli.js sync    <source> <scope>...
  *   node dist/market-graph/market-graph.cli.js signals <source> <scope>...
+ *   node dist/market-graph/market-graph.cli.js project
  *   node dist/market-graph/market-graph.cli.js sources
  *   node dist/market-graph/market-graph.cli.js purge   <source> --reason=<code> [--confirm]
  *
@@ -122,6 +124,45 @@ async function main(): Promise<void> {
 
       console.log('[normalize]', JSON.stringify(running));
 
+      /*
+       * Sanitized AFTER normalizing, and this ordering is a fix rather
+       * than tidiness.
+       *
+       * Redaction runs on the raw HTML, before entities are decoded, so a
+       * contact number written `070&nbsp;290 51 16` does not match the
+       * national phone pattern - its separator class cannot see an
+       * entity. The raw column therefore stays clean, the normalizer then
+       * decodes the entity to a space, and the number REASSEMBLES in
+       * descriptionText: a column the sanitizer had already been run
+       * over, in a form it had never seen. Seven rows in this corpus,
+       * eight real recruiter mobiles, and every one of them appeared
+       * during Phase 9's re-normalization - after the last sanitize had
+       * reported the corpus clean.
+       *
+       * Running the sanitizer here closes the window at the point it
+       * opens. It is not the only defence: the read path redacts again on
+       * the way out, because a guarantee that depends on an operator
+       * having run a second command is not a guarantee.
+       */
+      const cleaned = await app.get(MarketLegacySanitizerService).sanitize();
+
+      console.log('[sanitize-after-normalize]', JSON.stringify(cleaned));
+
+      return;
+    }
+
+    if (command === 'project') {
+      /*
+       * Rebuilds the search projection. Idempotent by content hash, so a
+       * second run over an unchanged corpus writes nothing, and an
+       * interrupted one resumes without duplicating work.
+       */
+      const result = await app
+        .get(MarketSearchProjectionService)
+        .project(new Date());
+
+      console.log('[project]', JSON.stringify(result));
+
       return;
     }
 
@@ -191,7 +232,7 @@ async function main(): Promise<void> {
       scopes.length === 0
     ) {
       console.error(
-        'usage: market-graph.cli.js <sync|signals> <source> <scope>... | sources | purge <source> --reason=<code> [--confirm]',
+        'usage: market-graph.cli.js <sync|signals> <source> <scope>... | sources | normalize | project | dataset [source|all] | sanitize-legacy | purge <source> --reason=<code> [--confirm]',
       );
       process.exitCode = 1;
       return;

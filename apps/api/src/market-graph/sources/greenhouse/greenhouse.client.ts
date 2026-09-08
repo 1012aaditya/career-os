@@ -1,5 +1,7 @@
 import { Injectable, Optional } from '@nestjs/common';
 
+import type { SourceClient, SourcePage } from '../source-adapter.js';
+
 /*
  * The Greenhouse Job Board HTTP layer.
  *
@@ -91,7 +93,7 @@ function retryAfterMs(header: string | null): number | null {
 }
 
 @Injectable()
-export class GreenhouseClient {
+export class GreenhouseClient implements SourceClient {
   constructor(
     /*
      * Injected so tests exercise the real backoff decisions without
@@ -210,5 +212,29 @@ export class GreenhouseClient {
       lastError ??
       new GreenhouseRequestError(boardToken, null, 'unexpected_response')
     );
+  }
+
+  /*
+   * The SourceClient surface.
+   *
+   * Greenhouse returns an entire board in one response, so its cursor is
+   * always null and its page ceiling is one. That is a real property worth
+   * stating in the return value rather than in the shape of the interface:
+   * this source cannot produce a torn page, and a source that can will
+   * return a cursor here instead.
+   */
+
+  readonly interScopeDelayMs = INTER_BOARD_DELAY_MS;
+
+  readonly maxPagesPerScope = 1;
+
+  async fetchScope(scope: string, _cursor: string | null): Promise<SourcePage> {
+    return { body: await this.fetchBoard(scope), nextCursor: null };
+  }
+
+  classifyFailure(error: unknown): string {
+    return error instanceof GreenhouseRequestError
+      ? error.reason
+      : 'unexpected_response';
   }
 }

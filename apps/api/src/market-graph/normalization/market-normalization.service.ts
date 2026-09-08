@@ -20,6 +20,18 @@ import { RULESET_VERSION } from './ruleset.js';
 /** A ceiling, so one call cannot walk an unbounded table. */
 const DEFAULT_BATCH = 500;
 
+export class VocabularyNotSyncedError extends Error {
+  readonly slug: string;
+
+  constructor(slug: string) {
+    super(
+      `Ruleset resolved "${slug}" but no vocabulary row exists for it; run syncVocabulary before normalizing`,
+    );
+    this.name = 'VocabularyNotSyncedError';
+    this.slug = slug;
+  }
+}
+
 export class NormalizationNotDeterministicError extends Error {
   readonly versionId: string;
 
@@ -53,10 +65,7 @@ export class MarketNormalizationService {
    * here, because normalizing is not observing and a backfill that moved
    * an observation time would be fabricating freshness.
    */
-  async normalizePending(input: {
-    now: Date;
-    batchSize?: number;
-  }): Promise<{
+  async normalizePending(input: { now: Date; batchSize?: number }): Promise<{
     normalized: number;
     mentions: number;
     unresolvedRoles: number;
@@ -157,11 +166,24 @@ export class MarketNormalizationService {
           : (roleAliasIds.get(normalized.roleAliasKey) ?? null);
 
       /*
-       * The CHECK constraint requires roleId IS NULL exactly when the
-       * method is UNMAPPED. If the vocabulary has not been synced the slug
-       * will not resolve, and reporting UNMAPPED then would be a lie about
-       * why - so the mismatch is refused here rather than written.
+       * A slug that resolved in code but has no vocabulary row is a
+       * FAILURE, not an unmapped title.
+       *
+       * The previous version quietly downgraded it to UNMAPPED so the
+       * CHECK constraint would accept the row. That made an unsynced
+       * vocabulary indistinguishable from a genuine curation gap - and
+       * permanently so, because normalization is append-only and the batch
+       * query skips versions that already have a row at this ruleset
+       * version. Worse, the determinism guard could not see it: outputHash
+       * is computed from the pure reading, which held the correct slug, so
+       * the stored row and its own hash disagreed and the hash still
+       * matched. Every posting in the corpus could be written UNMAPPED and
+       * nothing would notice.
        */
+      if (normalized.roleSlug !== null && roleId === null) {
+        throw new VocabularyNotSyncedError(normalized.roleSlug);
+      }
+
       const roleMatchMethod =
         roleId === null ? 'UNMAPPED' : normalized.roleMatchMethod;
 
@@ -228,6 +250,11 @@ export class MarketNormalizationService {
           mention.skillSlug === null
             ? null
             : (skillIds.get(mention.skillSlug) ?? null);
+
+        /* The same reasoning as the role above, for the same reason. */
+        if (mention.skillSlug !== null && skillId === null) {
+          throw new VocabularyNotSyncedError(mention.skillSlug);
+        }
 
         await this.prisma.marketPostingSkillMention.create({
           data: {

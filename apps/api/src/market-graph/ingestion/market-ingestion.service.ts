@@ -12,36 +12,66 @@ import {
   postingExternalId,
   rawPayloadHash,
 } from '../observations/posting-identity.js';
-import { GreenhouseAdapter } from '../sources/greenhouse/greenhouse.adapter.js';
+import type {
+  IdentityBasis,
+  RawPostingRecord,
+  SourceDescriptor,
+} from '../sources/source-adapter.js';
 import {
-  GreenhouseClient,
-  GreenhouseRequestError,
-  INTER_BOARD_DELAY_MS,
-} from '../sources/greenhouse/greenhouse.client.js';
-import type { RawPostingRecord } from '../sources/source-adapter.js';
-import {
-  type BoardCoverage,
   MarketIngestionRunService,
   type RunStats,
+  type ScopeCoverage,
 } from './market-ingestion-run.service.js';
 import { MarketVocabularyService } from './market-vocabulary.service.js';
 
 /*
- * Fetch -> parse -> persist.
+ * Fetch -> parse -> persist, for any source.
  *
  * The only impure layer in the observation half of Phase 8. Everything it
  * decides is decided by the pure modules it calls; what it adds is the
  * network, the clock and the database, in that order and nowhere else.
  *
- * The clock is taken as a parameter, never read here. That is what lets
- * the determinism tests advance time deliberately and assert that nothing
- * except the fields allowed to move actually moved.
+ * It used to be a Greenhouse driver under a general name: it constructed a
+ * GreenhouseAdapter as a field, took a GreenhouseClient in its
+ * constructor, exposed one method called ingestGreenhouse, hard-coded
+ * 'SOURCE_ID' twice, imported one source's politeness delay as the
+ * pipeline's pacing, and matched `instanceof GreenhouseRequestError` to
+ * classify every failure. The adapter contract was real for parsing and
+ * absent for everything around it, so adding a second source would have
+ * meant duplicating all of this rather than passing a different descriptor.
  */
 
-/** A ceiling, so a bad board list can never become an unbounded crawl. */
-const MAX_BOARDS_PER_RUN = 100;
+/** A ceiling, so a bad scope list can never become an unbounded crawl. */
+const MAX_SCOPES_PER_RUN = 100;
 
-function isUniqueViolationOn(error: unknown, column: string): boolean {
+/**
+ * Was this a unique violation on the constraint we expected?
+ *
+ * The constraint is checked, not just the code. Several unique constraints
+ * sit on this write path, and treating "a run is already live for this
+ * source" as "this posting already exists" would silently swallow a
+ * concurrency refusal and carry on writing.
+ *
+ * It has to read the DRIVER ADAPTER's error shape, and that was a real bug
+ * rather than defensive coding. PrismaService uses PrismaPg, and under a
+ * driver adapter Prisma does not populate `meta.target` at all - it
+ * populates `meta.driverAdapterError.cause.constraint.index` with the
+ * constraint name. Verified against the live database: a duplicate slug
+ * gives `meta.target === undefined` and
+ * `meta.driverAdapterError.cause.constraint.index === 'MarketRole_slug_key'`.
+ * So the previous implementation returned false for EVERY P2002, and the
+ * sighting insert's "a retry of the same run is a no-op" guarantee was in
+ * fact "a retry re-throws and kills the run". Unreachable with a source
+ * that returns each posting once per walk; reachable on the first walk of
+ * a paginated one, which is exactly what the sighting table's three-part
+ * key exists to accommodate.
+ *
+ * `meta.target` is still honoured, so this keeps working without an adapter.
+ */
+function isUniqueViolationOn(
+  error: unknown,
+  expected: { index: string; column: string },
+): boolean {
   if (
     !(error instanceof Prisma.PrismaClientKnownRequestError) ||
     error.code !== 'P2002'
@@ -49,17 +79,24 @@ function isUniqueViolationOn(error: unknown, column: string): boolean {
     return false;
   }
 
-  /*
-   * The target is checked, not just the code.
-   *
-   * Six unique constraints sit on this write path, and treating "a run is
-   * already live for this source" as "this posting already exists" would
-   * silently swallow a concurrency refusal and carry on writing. A P2002
-   * we did not specifically expect is re-thrown.
-   */
-  const target = error.meta?.target;
+  const meta = error.meta as
+    | {
+        target?: unknown;
+        driverAdapterError?: { cause?: { constraint?: { index?: unknown } } };
+      }
+    | undefined;
 
-  return Array.isArray(target) ? target.includes(column) : target === column;
+  const index = meta?.driverAdapterError?.cause?.constraint?.index;
+
+  if (typeof index === 'string') {
+    return index === expected.index;
+  }
+
+  const target = meta?.target;
+
+  return Array.isArray(target)
+    ? target.includes(expected.column)
+    : target === expected.column;
 }
 
 export type IngestResult = {
@@ -70,38 +107,36 @@ export type IngestResult = {
 
 @Injectable()
 export class MarketIngestionService {
-  private readonly adapter = new GreenhouseAdapter();
-
   constructor(
     private readonly prisma: PrismaService,
-    private readonly client: GreenhouseClient,
     private readonly runs: MarketIngestionRunService,
     private readonly vocabulary: MarketVocabularyService,
   ) {}
 
   /**
-   * Ingests a list of Greenhouse boards as one run.
+   * Ingests a list of scopes from one source as one run.
    *
    * `now` is the run clock. Every sighting this run writes carries it as
-   * `capturedAt`; `observedAt` is read per board, because a walk over forty
-   * boards spans minutes and pretending otherwise would put postings in the
-   * wrong signal window.
+   * `capturedAt`; `observedAt` is read per scope, because a walk over many
+   * scopes spans minutes and pretending otherwise would put postings in
+   * the wrong signal window.
    */
-  async ingestGreenhouse(input: {
-    boardTokens: readonly string[];
+  async ingest(input: {
+    source: SourceDescriptor;
+    scopes: readonly string[];
     now: Date;
     clock?: () => Date;
   }): Promise<IngestResult> {
     const clock = input.clock ?? (() => new Date());
+    const { adapter, client } = input.source;
 
-    const source = await this.vocabulary.ensureGreenhouseSource();
+    const source = await this.vocabulary.ensureSource(input.source);
 
     /*
-     * A disabled source is not ingested, and the refusal is loud.
-     *
-     * Without this check isEnabled would be a comment: the column would
-     * record an intention that no code path consulted, which is worse than
-     * not having it, because a reader would believe it was doing something.
+     * A disabled source is not ingested, and the refusal is loud. Without
+     * this check isEnabled would be a comment: a column recording an
+     * intention that no code path consulted, which is worse than not
+     * having it, because a reader would believe it was doing something.
      */
     if (!source.isEnabled) {
       throw new ConflictException(
@@ -110,26 +145,45 @@ export class MarketIngestionService {
     }
 
     /*
-     * Sorted and de-duplicated before anything else. The caller's ordering
-     * is not data, and a board listed twice would otherwise be fetched
-     * twice and counted twice in the coverage record.
+     * The adapter and the source row must agree about how identity is
+     * derived. They are two independent statements about one fact, and a
+     * disagreement means one of them is lying to every reader of every
+     * posting this run writes.
      */
-    const boards = [...new Set(input.boardTokens)]
-      .sort()
-      .slice(0, MAX_BOARDS_PER_RUN);
+    if (source.identityBasis !== adapter.identityBasis) {
+      throw new ConflictException(
+        `Source ${source.slug} records identity basis ${source.identityBasis} but its adapter declares ${adapter.identityBasis}`,
+      );
+    }
 
-    const queryParams = {
-      boards,
-      contentIncluded: true,
-      identityVersion: IDENTITY_VERSION,
-      contentHashVersion: CONTENT_HASH_VERSION,
-    };
+    const requested = [...new Set(input.scopes)].sort();
+
+    if (requested.length === 0) {
+      throw new ConflictException('At least one scope is required');
+    }
+
+    /*
+     * Refused rather than silently truncated. Slicing to a ceiling and
+     * then counting the SLICED list as "requested" meant a caller could
+     * ask for 150 scopes, have 50 never fetched, and still get SUCCEEDED -
+     * with no coverage row for the 50 to make them findable.
+     */
+    if (requested.length > MAX_SCOPES_PER_RUN) {
+      throw new ConflictException(
+        `Too many scopes: ${requested.length} requested, ceiling is ${MAX_SCOPES_PER_RUN}`,
+      );
+    }
 
     const run = await this.runs.start({
       sourceId: source.id,
-      adapterVersion: this.adapter.adapterVersion,
+      adapterVersion: adapter.adapterVersion,
       rulesetVersion: RULESET_VERSION,
-      queryParams,
+      queryParams: {
+        ...input.source.queryParams,
+        scopes: requested,
+        identityVersion: IDENTITY_VERSION,
+        contentHashVersion: CONTENT_HASH_VERSION,
+      },
       now: input.now,
     });
 
@@ -138,71 +192,67 @@ export class MarketIngestionService {
       select: { runSeq: true },
     });
 
-    const coverage: BoardCoverage[] = [];
+    const coverage: ScopeCoverage[] = [];
     let postingsCreated = 0;
     let versionsCreated = 0;
     let sightingsCreated = 0;
+    let scopeOrdinal = 0;
 
-    for (const [boardIndex, boardToken] of boards.entries()) {
-      if (boardIndex > 0) {
+    for (const [scopeIndex, scope] of requested.entries()) {
+      if (scopeIndex > 0) {
         await new Promise((resolve) =>
-          setTimeout(resolve, INTER_BOARD_DELAY_MS),
+          setTimeout(resolve, client.interScopeDelayMs),
         );
       }
 
-      const observedAt = clock();
+      const walk = await this.walkScope({ source: input.source, scope, clock });
 
-      let body: unknown;
-
-      try {
-        body = await this.client.fetchBoard(boardToken);
-      } catch (error) {
-        const reason =
-          error instanceof GreenhouseRequestError
-            ? error.reason
-            : 'unexpected_response';
-
-        /*
-         * A board we could not read is recorded as NOT read and NOT
-         * complete. In particular a 404 is not "this employer has no jobs":
-         * the body is byte-identical for a mistyped token, a renamed board
-         * and a genuinely retired one, and reading it as emptiness would
-         * age every posting on that board to closed on the strength of a
-         * typo. Fails closed.
-         */
-        coverage.push({
-          boardToken,
-          fetched: false,
-          failureReason: reason,
+      if (walk.failureReason !== null) {
+        const failed: ScopeCoverage = {
+          sourceScope: scope,
+          read: false,
+          completeForScope: false,
+          pagesFetched: walk.pagesFetched,
+          failureReason: walk.failureReason,
           postingsSeen: 0,
           postingsAccepted: 0,
           postingsRejected: 0,
           duplicatesDropped: 0,
-        });
+        };
+
+        coverage.push(failed);
 
         await this.recordCoverage({
           runId: run.id,
           sourceId: source.id,
-          coverage: coverage[coverage.length - 1]!,
+          coverage: failed,
           now: clock(),
         });
 
         continue;
       }
 
-      const parsed = this.adapter.parse(body, boardToken);
-      const { ordered, duplicatesDropped } = orderAndDedupe(parsed.accepted);
+      /*
+       * Deduplicated once per SCOPE, not once per page. A paginated source
+       * can return one posting on two pages when the underlying set shifts
+       * mid-walk; per-page dedupe would miss that. The stored rows would
+       * still be right - the sighting insert refuses the duplicate - but
+       * `duplicatesDropped` would under-report and the walk would look
+       * cleaner than it was.
+       */
+      const { ordered, duplicatesDropped } = orderAndDedupe(walk.accepted);
 
       for (const [position, record] of ordered.entries()) {
         const written = await this.persistPosting({
           sourceId: source.id,
           sourceSlug: source.slug,
+          identityBasis: adapter.identityBasis,
           runId: run.id,
           runSeq: runRow.runSeq,
           record,
-          observedAt,
+          observedAt: walk.observedAt,
           capturedAt: input.now,
-          pageIndex: boardIndex,
+          pageIndex: scopeOrdinal,
           indexInPage: position,
         });
 
@@ -211,30 +261,40 @@ export class MarketIngestionService {
         if (written.sightingCreated) sightingsCreated += 1;
       }
 
-      const boardCoverage: BoardCoverage = {
-        boardToken,
-        fetched: true,
+      scopeOrdinal += 1;
+
+      const scopeCoverage: ScopeCoverage = {
+        sourceScope: scope,
+        read: true,
+        /*
+         * Read to the END, which is a different claim. False when the walk
+         * stopped at the client's page ceiling with a cursor still
+         * outstanding - the source had more and would not serve it.
+         */
+        completeForScope: walk.exhausted,
+        pagesFetched: walk.pagesFetched,
         failureReason: null,
-        postingsSeen: parsed.accepted.length + parsed.rejected.length,
+        postingsSeen: walk.accepted.length + walk.rejected,
         postingsAccepted: ordered.length,
-        postingsRejected: parsed.rejected.length,
+        postingsRejected: walk.rejected,
         duplicatesDropped,
       };
 
-      coverage.push(boardCoverage);
+      coverage.push(scopeCoverage);
 
       await this.recordCoverage({
         runId: run.id,
         sourceId: source.id,
-        coverage: boardCoverage,
+        coverage: scopeCoverage,
         now: clock(),
       });
     }
 
     const stats: RunStats = {
-      boards: coverage,
-      boardsRequested: boards.length,
-      boardsFetched: coverage.filter((entry) => entry.fetched).length,
+      scopes: coverage,
+      scopesRequested: requested.length,
+      scopesRead: coverage.filter((entry) => entry.read).length,
+      scopesComplete: coverage.filter((entry) => entry.completeForScope).length,
       postingsAccepted: coverage.reduce((n, c) => n + c.postingsAccepted, 0),
       postingsRejected: coverage.reduce((n, c) => n + c.postingsRejected, 0),
       duplicatesDropped: coverage.reduce((n, c) => n + c.duplicatesDropped, 0),
@@ -252,32 +312,117 @@ export class MarketIngestionService {
     return { runId: run.id, status: finished.status, stats };
   }
 
+  /**
+   * Walks one scope to the end, or to the client's page ceiling.
+   *
+   * Returns whether the scope was EXHAUSTED, which is the fact both the
+   * run status and the coverage ledger turn on.
+   */
+  private async walkScope(input: {
+    source: SourceDescriptor;
+    scope: string;
+    clock: () => Date;
+  }): Promise<{
+    accepted: RawPostingRecord[];
+    rejected: number;
+    pagesFetched: number;
+    exhausted: boolean;
+    observedAt: Date;
+    failureReason: string | null;
+  }> {
+    const { adapter, client } = input.source;
+
+    const accepted: RawPostingRecord[] = [];
+    let rejected = 0;
+    let pagesFetched = 0;
+    let cursor: string | null = null;
+    const observedAt = input.clock();
+
+    for (let page = 0; page < client.maxPagesPerScope; page += 1) {
+      let fetched: { body: unknown; nextCursor: string | null };
+
+      try {
+        fetched = await client.fetchScope(input.scope, cursor);
+      } catch (error) {
+        /*
+         * A scope we could not read is recorded as NOT read and NOT
+         * complete. In particular a 404 is not "this employer has no
+         * jobs": the body is identical for a mistyped token, a renamed
+         * board and a genuinely retired one, and reading it as emptiness
+         * would age every posting in that scope to closed on the strength
+         * of a typo. Fails closed.
+         *
+         * The reason code comes from the CLIENT, which is the only thing
+         * that knows its own error type. Matching one source's error class
+         * here meant every other source's failures collapsed to
+         * 'unexpected_response' - a rate limit and a dead credential
+         * recorded identically.
+         */
+        return {
+          accepted,
+          rejected,
+          pagesFetched,
+          exhausted: false,
+          observedAt,
+          failureReason: client.classifyFailure(error),
+        };
+      }
+
+      pagesFetched += 1;
+
+      const parsed = adapter.parse(fetched.body, input.scope);
+
+      accepted.push(...parsed.accepted);
+      rejected += parsed.rejected.length;
+      cursor = fetched.nextCursor;
+
+      if (cursor === null) {
+        return {
+          accepted,
+          rejected,
+          pagesFetched,
+          exhausted: true,
+          observedAt,
+          failureReason: null,
+        };
+      }
+    }
+
+    /*
+     * The ceiling was reached with a cursor still outstanding. Every
+     * request succeeded, so the scope was READ; the source has more than
+     * it would serve, so it was not read COMPLETELY.
+     */
+    return {
+      accepted,
+      rejected,
+      pagesFetched,
+      exhausted: false,
+      observedAt,
+      failureReason: null,
+    };
+  }
+
   private async recordCoverage(input: {
     runId: string;
     sourceId: string;
-    coverage: BoardCoverage;
+    coverage: ScopeCoverage;
     now: Date;
   }): Promise<void> {
     /*
-     * Written per board as the run proceeds, not batched at the end. A run
-     * that dies mid-walk then still leaves an honest record of the boards
-     * it did read, instead of leaving no record and looking like a run that
+     * Written per scope as the run proceeds, not batched at the end. A run
+     * that dies mid-walk then still leaves an honest record of the scopes
+     * it did read, instead of leaving none and looking like a run that
      * read nothing.
      */
     await this.prisma.marketRunScopeCoverage.create({
       data: {
         runId: input.runId,
         sourceId: input.sourceId,
-        sourceScope: input.coverage.boardToken,
+        sourceScope: input.coverage.sourceScope,
         requested: true,
-        read: input.coverage.fetched,
-        /*
-         * For Greenhouse these are the same question: the whole board
-         * arrives in one response, so a fetch that completed read the
-         * scope completely. A paginated source will have to distinguish
-         * them, which is why they are two columns.
-         */
-        completeForScope: input.coverage.fetched,
+        read: input.coverage.read,
+        completeForScope: input.coverage.completeForScope,
         failureReason: input.coverage.failureReason,
         postingsSeen: input.coverage.postingsSeen,
         postingsAccepted: input.coverage.postingsAccepted,
@@ -295,11 +440,12 @@ export class MarketIngestionService {
    * Re-ingesting an unchanged posting appends exactly one sighting row and
    * advances exactly one column; every content field and every source
    * timestamp is untouchable by this path, because they live on an
-   * immutable row that is keyed by a hash of themselves.
+   * immutable row keyed by a hash of themselves.
    */
   private async persistPosting(input: {
     sourceId: string;
     sourceSlug: string;
+    identityBasis: IdentityBasis;
     runId: string;
     runSeq: number;
     record: RawPostingRecord;
@@ -316,7 +462,16 @@ export class MarketIngestionService {
 
     const externalId = postingExternalId({
       sourceSlug: input.sourceSlug,
-      identityBasis: 'SOURCE_ID',
+      /*
+       * Read from the adapter, not hard-coded. The literal 'SOURCE_ID' was
+       * written here twice while MarketSource.identityBasis and
+       * SourceAdapter.identityBasis both existed and neither was read - so
+       * a URL-identified source would have been stamped `sid:` and stored
+       * as SOURCE_ID, claiming a stronger provenance than its data
+       * supports, in the exact column that exists to make the basis
+       * falsifiable.
+       */
+      identityBasis: input.identityBasis,
       sourceScope: record.sourceScope,
       externalKey: record.externalKey,
     });
@@ -346,7 +501,7 @@ export class MarketIngestionService {
       create: {
         sourceId: input.sourceId,
         externalId,
-        identityBasis: 'SOURCE_ID',
+        identityBasis: input.identityBasis,
         identityVersion: IDENTITY_VERSION,
         externalKey: record.externalKey,
         sourceScope: record.sourceScope,
@@ -419,8 +574,9 @@ export class MarketIngestionService {
           /*
            * The source's claim about its own last update, kept per
            * observation. It is excluded from the content hash so an
-           * internal ATS touch does not mint a 20KB version; recording it
-           * here is what stops that exclusion losing the information.
+           * internal edit at the source does not mint a fresh version;
+           * recording it here is what stops that exclusion losing the
+           * information.
            */
           sourceUpdatedAt: toDate(record.sourceUpdatedAt),
           pageIndex: input.pageIndex,
@@ -430,21 +586,27 @@ export class MarketIngestionService {
 
       sightingCreated = true;
     } catch (error) {
-      if (!isUniqueViolationOn(error, 'postingId')) {
+      if (
+        !isUniqueViolationOn(error, {
+          index: 'MarketPostingSighting_pkey',
+          column: 'postingId',
+        })
+      ) {
         throw error;
       }
       /*
-       * This run has already recorded this posting at this version. A
-       * retry of the same run is a no-op, which is what makes re-running a
+       * This run has already recorded this posting at this version - a
+       * paginated source returning it on two pages, or a retry of the same
+       * run. Either way it is a no-op, which is what makes re-running a
        * failed ingest safe.
        */
     }
 
     if (sightingCreated) {
       /*
-       * Monotonic. GREATEST in effect: the guard means a late-finishing
-       * retry whose observedAt is older than a run that already completed
-       * cannot walk the posting's last-seen time backwards.
+       * Monotonic. The guard means a late-finishing retry whose observedAt
+       * is older than a run that already completed cannot walk the
+       * posting's last-seen time backwards.
        */
       await this.prisma.marketPosting.updateMany({
         where: { id: posting.id, lastSeenAt: { lt: input.observedAt } },

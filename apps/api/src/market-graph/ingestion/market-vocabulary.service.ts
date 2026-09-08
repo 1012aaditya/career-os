@@ -1,6 +1,10 @@
 import { Injectable } from '@nestjs/common';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
+import type {
+  IdentityBasis,
+  SourceDescriptor,
+} from '../sources/source-adapter.js';
 import {
   ROLE_ALIASES,
   ROLES,
@@ -28,54 +32,53 @@ import {
 export class MarketVocabularyService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async ensureGreenhouseSource(): Promise<{
+  /**
+   * Ensures a source row exists for a descriptor, and returns it.
+   *
+   * Generic, taking the descriptor the source itself declares. It used to
+   * be `ensureGreenhouseSource()` with one source's slug, licence note and
+   * enabled flag written into the body of a service whose job is
+   * projecting the ruleset - so the vocabulary layer carried one source's
+   * legal position as a code literal.
+   */
+  async ensureSource(descriptor: SourceDescriptor): Promise<{
     id: string;
     slug: string;
     isEnabled: boolean;
+    identityBasis: IdentityBasis;
   }> {
     return this.prisma.marketSource.upsert({
-      where: { slug: 'greenhouse' },
+      where: { slug: descriptor.slug },
       /*
        * update is empty on purpose. Operational columns - isEnabled, the
        * expected posting lifetime, the poll interval - are meant to be
        * tuned in the database from real observation, and a deploy that
-       * reset them to the code's defaults would silently undo that
+       * reset them to the code's declaration would silently undo that
        * tuning every time the process restarted.
        */
       update: {},
       create: {
-        slug: 'greenhouse',
-        displayName: 'Greenhouse Job Boards',
+        slug: descriptor.slug,
+        displayName: descriptor.displayName,
         kind: 'JOB_BOARD',
-        identityBasis: 'SOURCE_ID',
+        identityBasis: descriptor.adapter.identityBasis,
+        licenceBasis: descriptor.licenceBasis,
+        licenceNote: descriptor.licenceNote,
+        licenceReviewedAt: descriptor.licenceReviewedAt,
         /*
-         * Not a grant. No terms of service governing this API were found;
-         * the endpoint is documented as public, unauthenticated and
-         * intended for third parties, and carries no clause forbidding
-         * aggregation or requiring deletion. Recorded as its own value so
-         * the position is queryable rather than remembered.
+         * Taken from the descriptor against a schema default of false, so
+         * enabling a source remains an act somebody performed rather than
+         * a consequence of inserting a row.
          */
-        licenceBasis: 'UNADDRESSED_PUBLIC_ENDPOINT',
-        licenceNote:
-          'No terms of service governing the public Job Board API were found on 2026-09-08. The endpoint is documented as public, unauthenticated and intended for third parties, and carries no clause forbidding aggregation or requiring deletion - which is the inverse of Adzuna, whose terms name aggregation into vacancy counts in their prohibited list. This is an unresolved position, not a grant.',
-        licenceReviewedAt: new Date('2026-09-08T00:00:00.000Z'),
-        /*
-         * Set explicitly, against a schema default of false.
-         *
-         * The default fails closed because the licence position is the one
-         * dimension this phase admits is unresolved, and a source should
-         * not become live as a side effect of inserting a row. Enabling it
-         * here is a deliberate act by somebody who read the note above.
-         */
-        isEnabled: true,
-        /*
-         * Left false. Ingesting for internal analysis and publishing
-         * derived aggregates to users are different permissions, and only
-         * the first has been reasoned about.
-         */
-        mayRedistributeDerived: false,
+        isEnabled: descriptor.isEnabled,
+        mayRedistributeDerived: descriptor.mayRedistributeDerived,
       },
-      select: { id: true, slug: true, isEnabled: true },
+      select: {
+        id: true,
+        slug: true,
+        isEnabled: true,
+        identityBasis: true,
+      },
     });
   }
 

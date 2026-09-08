@@ -112,14 +112,17 @@ describe('authentication', () => {
     await request(app.getHttpServer()).get(path).expect(401);
   });
 
-  it.each(ROUTES)('rejects an invalid token on %s %s', async (_method, path) => {
-    app = await createApp();
+  it.each(ROUTES)(
+    'rejects an invalid token on %s %s',
+    async (_method, path) => {
+      app = await createApp();
 
-    await request(app.getHttpServer())
-      .get(path)
-      .set('Authorization', 'Bearer nope')
-      .expect(401);
-  });
+      await request(app.getHttpServer())
+        .get(path)
+        .set('Authorization', 'Bearer nope')
+        .expect(401);
+    },
+  );
 
   it.each(ROUTES)('serves %s %s to a valid token', async (_method, path) => {
     app = await createApp();

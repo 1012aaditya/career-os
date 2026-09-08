@@ -20,10 +20,21 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 /** How long a RUNNING row is honoured before it is treated as abandoned. */
 const STALE_RUN_MS = 30 * 60 * 1000;
 
-export type BoardCoverage = {
-  boardToken: string;
-  /** Did the fetch complete? False means we do not know what is there. */
-  fetched: boolean;
+export type ScopeCoverage = {
+  sourceScope: string;
+  /** The fetch(es) completed and we know what came back. */
+  read: boolean;
+  /**
+   * AND we reached the end of the scope.
+   *
+   * Separate from `read`, and the separation is load-bearing. A source
+   * whose scope spans more pages than its own server will serve is READ -
+   * every request succeeded - and NOT COMPLETE. Both were previously set
+   * from one boolean, so a paginated source that fetched page 1 of 40 on
+   * every scope would have reported SUCCEEDED.
+   */
+  completeForScope: boolean;
+  pagesFetched: number;
   /** Short stable code. Never a caught error. */
   failureReason: string | null;
   postingsSeen: number;
@@ -33,9 +44,10 @@ export type BoardCoverage = {
 };
 
 export type RunStats = {
-  boards: BoardCoverage[];
-  boardsRequested: number;
-  boardsFetched: number;
+  scopes: ScopeCoverage[];
+  scopesRequested: number;
+  scopesRead: number;
+  scopesComplete: number;
   postingsAccepted: number;
   postingsRejected: number;
   duplicatesDropped: number;
@@ -57,11 +69,23 @@ export type RunStats = {
 export function deriveRunStatus(
   stats: RunStats,
 ): 'SUCCEEDED' | 'PARTIAL' | 'FAILED' {
-  if (stats.boardsRequested === 0 || stats.boardsFetched === 0) {
+  if (stats.scopesRequested === 0 || stats.scopesRead === 0) {
     return 'FAILED';
   }
 
-  return stats.boardsFetched === stats.boardsRequested
+  /*
+   * SUCCEEDED requires every scope to have been read AND read to the end.
+   *
+   * Branching on `scopesRead` alone was correct only for a source that
+   * returns a whole scope in one response. The moment a scope spans more
+   * pages than can be walked - JobTech's Data/IT field holds 2535 ads
+   * behind a server-side offset cap of 2000 - a run that read every scope
+   * completely successfully has still not seen 535 postings, and calling
+   * that SUCCEEDED is the false-completeness this contract exists to
+   * forbid.
+   */
+  return stats.scopesRead === stats.scopesRequested &&
+    stats.scopesComplete === stats.scopesRequested
     ? 'SUCCEEDED'
     : 'PARTIAL';
 }

@@ -1,10 +1,11 @@
 import { NestFactory } from '@nestjs/core';
 
-import { MarketGraphCoreModule } from './market-graph-core.module.js';
 import { MarketIngestionService } from './ingestion/market-ingestion.service.js';
 import { MarketVocabularyService } from './ingestion/market-vocabulary.service.js';
+import { MarketGraphCoreModule } from './market-graph-core.module.js';
 import { MarketNormalizationService } from './normalization/market-normalization.service.js';
 import { MarketSignalService } from './signals/market-signal.service.js';
+import { MarketSourceRegistry } from './sources/source-registry.js';
 
 /*
  * The operator entry point for the Market Graph pipeline.
@@ -16,8 +17,13 @@ import { MarketSignalService } from './signals/market-signal.service.js';
  * and there is no write path on it to secure.
  *
  * Usage, from apps/api after `pnpm build`:
- *   node dist/market-graph/market-graph.cli.js sync <board> [<board>...]
- *   node dist/market-graph/market-graph.cli.js signals <board> [<board>...]
+ *   node dist/market-graph/market-graph.cli.js sync    <source> <scope>...
+ *   node dist/market-graph/market-graph.cli.js signals <source> <scope>...
+ *   node dist/market-graph/market-graph.cli.js sources
+ *
+ * The source is an argument. It used to be baked in: the CLI called
+ * `ensureGreenhouseSource()` and `ingestGreenhouse()` and hard-coded the
+ * slug when computing signals.
  */
 
 const DEFAULT_WINDOW_DAYS = 30;
@@ -25,49 +31,60 @@ const DEFAULT_WINDOW_DAYS = 30;
 /*
  * The publication floor.
  *
- * A prevalence is not written below thirty eligible postings or two
- * distinct employers. Both numbers are hypotheses to be revised once the
- * real distribution is visible, which is exactly why they are recorded on
- * the signal run rather than left implicit in code: changing them produces
- * a new, comparable snapshot instead of silently changing what an existing
- * number means.
- *
- * The company floor matters more than it looks. It is what stops one
- * employer's board being published as "the market".
+ * A prevalence is not written below thirty eligible postings, or where
+ * either the eligible cohort or the postings that actually mention the
+ * skill come from fewer than two employers. Both numbers are hypotheses to
+ * be revised once the real distribution is visible, which is exactly why
+ * they are recorded on the signal run rather than left implicit in code:
+ * changing them produces a new, comparable snapshot instead of silently
+ * changing what an existing number means.
  */
 const MIN_DENOMINATOR = 30;
 const MIN_DISTINCT_COMPANIES = 2;
 
 async function main(): Promise<void> {
-  const [command, ...boards] = process.argv.slice(2);
+  const [command, sourceSlug, ...scopes] = process.argv.slice(2);
 
-  if (command !== 'sync' && command !== 'signals') {
-    console.error('usage: market-graph.cli.js <sync|signals> <board>...');
-    process.exitCode = 1;
-    return;
-  }
-
-  if (boards.length === 0) {
-    console.error('at least one board token is required');
-    process.exitCode = 1;
-    return;
-  }
-
-  /*
-   * The core module, not AppModule. The pipeline has no business booting
-   * the auth stack, and requiring Supabase credentials to run an ingest
-   * would be a dependency that exists only because of how the modules were
-   * arranged.
-   */
   const app = await NestFactory.createApplicationContext(
     MarketGraphCoreModule,
     { logger: ['error', 'warn'] },
   );
 
   try {
+    const registry = app.get(MarketSourceRegistry);
+
+    if (command === 'sources') {
+      for (const descriptor of registry.descriptors()) {
+        console.log(
+          '[source]',
+          JSON.stringify({
+            slug: descriptor.slug,
+            licenceBasis: descriptor.licenceBasis,
+            mayRedistributeDerived: descriptor.mayRedistributeDerived,
+            identityBasis: descriptor.adapter.identityBasis,
+          }),
+        );
+      }
+
+      return;
+    }
+
+    if (
+      (command !== 'sync' && command !== 'signals') ||
+      sourceSlug === undefined ||
+      scopes.length === 0
+    ) {
+      console.error(
+        'usage: market-graph.cli.js <sync|signals> <source> <scope>... | sources',
+      );
+      process.exitCode = 1;
+      return;
+    }
+
+    const descriptor = registry.get(sourceSlug);
     const vocabulary = app.get(MarketVocabularyService);
 
-    await vocabulary.ensureGreenhouseSource();
+    await vocabulary.ensureSource(descriptor);
     const synced = await vocabulary.syncVocabulary();
     console.log('[vocabulary]', JSON.stringify(synced));
 
@@ -83,18 +100,21 @@ async function main(): Promise<void> {
        */
       const now = new Date();
 
-      const result = await ingestion.ingestGreenhouse({
-        boardTokens: boards,
+      const result = await ingestion.ingest({
+        source: descriptor,
+        scopes,
         now,
       });
 
       console.log(
         '[ingest]',
         JSON.stringify({
+          source: descriptor.slug,
           runId: result.runId,
           status: result.status,
-          boardsRequested: result.stats.boardsRequested,
-          boardsFetched: result.stats.boardsFetched,
+          scopesRequested: result.stats.scopesRequested,
+          scopesRead: result.stats.scopesRead,
+          scopesComplete: result.stats.scopesComplete,
           postingsAccepted: result.stats.postingsAccepted,
           postingsRejected: result.stats.postingsRejected,
           duplicatesDropped: result.stats.duplicatesDropped,
@@ -104,11 +124,23 @@ async function main(): Promise<void> {
         }),
       );
 
+      for (const scope of result.stats.scopes) {
+        console.log(
+          '[scope]',
+          JSON.stringify({
+            scope: scope.sourceScope,
+            read: scope.read,
+            complete: scope.completeForScope,
+            pages: scope.pagesFetched,
+            accepted: scope.postingsAccepted,
+            rejected: scope.postingsRejected,
+            failure: scope.failureReason,
+          }),
+        );
+      }
+
       let total = { normalized: 0, mentions: 0, unresolvedRoles: 0 };
 
-      /*
-       * Batched to a ceiling and looped, rather than one unbounded query.
-       */
       for (;;) {
         const batch = await normalization.normalizePending({ now: new Date() });
 
@@ -135,19 +167,22 @@ async function main(): Promise<void> {
     );
 
     const computed = await signals.compute({
-      sourceSlug: 'greenhouse',
-      scopes: boards,
+      sourceSlug: descriptor.slug,
+      scopes,
       windowStart,
       windowEnd,
       minDenominator: MIN_DENOMINATOR,
       minDistinctCompanies: MIN_DISTINCT_COMPANIES,
       now,
+      clock: () => new Date(),
     });
 
     console.log(
       '[signals]',
       JSON.stringify({
+        source: descriptor.slug,
         runId: computed.runId,
+        status: computed.status,
         signalCount: computed.signalCount,
         coverageComplete: computed.coverageComplete,
         windowStart: windowStart.toISOString(),

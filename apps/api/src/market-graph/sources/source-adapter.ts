@@ -112,3 +112,77 @@ export interface SourceAdapter {
    */
   parse(body: unknown, sourceScope: string): AdapterParseResult;
 }
+
+/*
+ * ---------------------------------------------------------------------
+ * THE FETCH SIDE
+ * ---------------------------------------------------------------------
+ *
+ * `parse` above is the pure half of a source. This is the impure half, and
+ * it is an interface for the same reason: the ingestion pipeline must be
+ * able to walk any source without knowing which one it is walking.
+ *
+ * It was not, before. `MarketIngestionService` constructed a Greenhouse
+ * adapter as a field, took a Greenhouse client in its constructor, and
+ * exposed one method named after the source. The contract seam was real
+ * for parsing and absent for everything around it, so adding a second
+ * source meant duplicating the orchestration - and with it the run ledger,
+ * the coverage bookkeeping and the identity rules.
+ */
+
+/** One page of one scope. A source with no pagination returns cursor null. */
+export type SourcePage = {
+  body: unknown;
+  /** Opaque and source-defined. Null means the scope is exhausted. */
+  nextCursor: string | null;
+};
+
+export interface SourceClient {
+  /**
+   * Fetches one page. `cursor` is null for the first page of a scope.
+   *
+   * Throws on failure; the thrown value is classified by `classifyFailure`
+   * and never stored or logged directly.
+   */
+  fetchScope(scope: string, cursor: string | null): Promise<SourcePage>;
+
+  /**
+   * A short, stable reason code for a thrown failure.
+   *
+   * Lives on the client because only the client knows its own error type.
+   * Previously the ingestion service matched `instanceof
+   * GreenhouseRequestError` directly, so any other source's failures would
+   * all have collapsed to `unexpected_response` - a rate limit and an
+   * expired credential recorded as the same thing in the ledger.
+   */
+  classifyFailure(error: unknown): string;
+
+  /** This source's own politeness delay between scopes. */
+  readonly interScopeDelayMs: number;
+
+  /**
+   * A ceiling on pages per scope, so a walk can never become unbounded.
+   *
+   * Reaching it means the scope was READ but not READ COMPLETELY, which is
+   * a distinction the coverage ledger has always had two columns for and
+   * that nothing previously set differently.
+   */
+  readonly maxPagesPerScope: number;
+}
+
+/** Everything the pipeline needs to ingest one source. */
+export type SourceDescriptor = {
+  slug: string;
+  displayName: string;
+  adapter: SourceAdapter;
+  client: SourceClient;
+  /** Recorded on the run and fingerprinted, so a sample is reproducible. */
+  queryParams: Record<string, unknown>;
+  licenceBasis: 'UNADDRESSED_PUBLIC_ENDPOINT' | 'EXPLICIT_GRANT' | 'CONTRACTED';
+  licenceNote: string;
+  licenceReviewedAt: Date;
+  /** Never defaulted. Enabling a source is a deliberate act. */
+  isEnabled: boolean;
+  /** Whether derived aggregates from this source may be shown to users. */
+  mayRedistributeDerived: boolean;
+};

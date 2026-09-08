@@ -449,6 +449,99 @@ one of those lands.
 
 ---
 
+## O*NET — the highest-value finding in this roadmap, and not a job source
+
+O*NET is a US Department of Labor occupational database. It carries no job
+postings, no wages and no vacancy volumes, so by the framing of this brief
+it is not a "source" at all. It is nonetheless the most valuable thing
+found, because it fixes the pipeline's weakest component rather than adding
+to its strongest.
+
+**The problem it solves.** The role and skill vocabulary is hand-maintained
+in `ruleset.ts`: 19 roles, 61 skills, English-tuned and tech-oriented. It
+resolves **0 of 3,338** Teaching Vacancies titles, 282 of 53,799 Canada Job
+Bank titles, and 3.22% of JobTech's. Four of six live sources therefore
+contribute to role volume and to no skill-prevalence denominator. **More
+sources do not fix this. A better vocabulary does.**
+
+**What O*NET offers**, measured from the live 31.0 files rather than quoted
+from marketing:
+
+| Asset | Size | Use |
+|---|---|---|
+| `job_titles` | **44,779 distinct titles** → occupational codes | title normalisation |
+| `software_skills` | **8,753 distinct product names** | tech-skill extraction |
+| `gwas_to_iwas_to_dwas` | **2,087 work-activity phrases** | responsibility matching |
+| SOC / ESCO / CIP crosswalks | — | bridge to BLS and to European taxonomies |
+
+Against a current vocabulary of 19 roles and 61 skills, that is three orders
+of magnitude.
+
+### The licence split, which decides the whole design
+
+There are **three separate licences plus a Terms of Service**, and they are
+routinely conflated. The difference is decisive:
+
+| | Bulk database download | Web Services API |
+|---|---|---|
+| Licence | **CC BY 4.0** | **not** CC BY — account-bound, non-transferable |
+| Adapt / normalise | permitted, with modified-use attribution | **prohibited** — ToS term 10a |
+| Paid or login-gated product | unrestricted | **written permission required** — ToS 10c |
+| Expose derived data to your users | permitted | **non-transferable** |
+| Rate limits | none | 5/sec, 50,000/day |
+| Attribution | standard CC BY credit | **prominent link near point of use** |
+
+**So the API is the trap and the bulk download is the answer.** Ingesting
+the ~25 MB CC BY files avoids the no-modification clause, the commercial
+permission requirement, the non-transferability clause and the rate limits
+in one move. Using the API for the same purpose would breach term 10a on
+the first normalisation.
+
+### What it does not give you
+
+- **No wages, no employment volumes.** Every salary figure surfaced through
+  O*NET is BLS data, explicitly carved out of both O*NET licences. Attribute
+  those to BLS and source them from BLS.
+- **Annual refresh per occupation** — 208 of 923 occupations updated in
+  31.0. It is an ontology, not a market signal.
+- **A vocabulary trap:** the `essential_skills` and `transferable_skills`
+  files contain **35 terms combined** ("Reading Comprehension", "Social
+  Perceptiveness"). They are psychometric constructs, not skills anyone
+  writes in a posting. Using them as an extraction vocabulary is the
+  standard O*NET mistake. The extraction assets are Software Skills and
+  DWAs.
+- **31.0 renamed its files** (`Technology Skills` → `Software Skills`;
+  `Skills` split into Essential and Transferable). Any older integration
+  guide is stale.
+
+### Attribution, which is a production gate
+
+Normalising O*NET terms into our own vocabulary **is** a modification, so
+the modified-use variant is required verbatim, with a link to the CC BY
+licence:
+
+> This page includes information from the O*NET 31.0 Database by the U.S.
+> Department of Labor, Employment and Training Administration (USDOL/ETA).
+> Used under the CC BY 4.0 license. O*NET® is a trademark of USDOL/ETA.
+> [Company] has modified all or some of this information. USDOL/ETA has not
+> approved, endorsed, or tested these modifications.
+
+Trademark usage is also constrained: "O*NET® data", never "powered by
+O*NET" or "O*NET's skills".
+
+### Where this belongs in the priority order
+
+**Above every unbuilt source.** It raises the yield of all six sources
+already ingested, it is CC BY with no access negotiation, and it pairs
+naturally with the Unicode tokenizer item — both are vocabulary work, and
+together they address the reason the market graph currently publishes far
+less than it observes.
+
+Classification: **BUILD_NOW**, as a vocabulary source rather than a market
+source.
+
+---
+
 ## Geographic Coverage Gaps
 
 Coverage measured by what is **live and enabled today**, not by what is
@@ -511,6 +604,10 @@ JobTech, Canada Job Bank, USAJOBS Historic, Teaching Vacancies, Jobicy.
 Greenhouse and NAV implemented but disabled.
 
 ### TIER 1 — build next, no new permission needed
+0. **O*NET bulk vocabulary ingest** — CC BY 4.0, no negotiation, and it
+   raises the yield of every source already held. 44,779 titles and 8,753
+   software terms against a current vocabulary of 19 roles and 61 skills.
+   Use the bulk files, never the API.
 1. **NAV cursor persistence** — an *engineering* item, not a licensing one.
    NAV's licence explicitly names statistical use; it is disabled purely
    because the ingestion model cannot persist a feed cursor across runs.

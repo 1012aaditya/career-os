@@ -295,6 +295,19 @@ Usefully, `api.data.gov.in/lists` enumerates the resource catalogue **with
 no key at all**, which is the legitimate way to inventory what is actually
 published without touching a disallowed host.
 
+**A correction: the platform is not uniformly GODL-licensed.** That is the
+footer's claim, but every resource carries a declared **Access Type** —
+"Open, Priced, Registered Access or Restricted Access (G2G)". Only *Open*
+is straightforwardly GODL-open; "Priced" implies paid licensing and
+"Restricted (G2G)" is the same government-to-government posture that
+defeats API Setu. **Access Type must be checked per resource** and recorded
+alongside the retrieval date. Generalising from the platform footer would
+have been wrong.
+
+Usefully, **Frequency** and **Granularity of Data** are also declared
+machine-readable metadata fields per dataset, so freshness is something a
+build can read rather than infer.
+
 **What still blocks BUILD_NOW** — three items, roughly a day's work:
 1. **Whether a private commercial company may register for a key is
    unverified.** No eligibility terms were found in either direction. The
@@ -331,6 +344,20 @@ That carve-out is fatal here specifically, because **NCS's vacancy corpus
 is substantially supplied inbound by private job boards under MoUs** — TCS
 iON, HireMee, TeamLease, foundit, Quess, Quikr and others, ~25 MoUs by mid
 2025. NCS cannot sub-license to us what it received from Foundit.
+
+**And the ask is bigger than "send us a file".** NDSAP §2.8 defines the
+negative list as "Non-sharable data as declared by the departments/
+organizations", and preparing it is a named duty of each department's Data
+Controller. So whether NCS vacancy-level data is open is **DGE's unilateral
+call** — and the aggregate-only character of what has been published is
+consistent with DGE having already placed vacancy data on its own negative
+list. A partnership approach is therefore a request to change a
+departmental classification, not merely to obtain a file. Price that in.
+
+There is a concrete entry point rather than a generic ministry address:
+**`ndsap@gov.in`** (the NDSAP programme office) and a public register of
+nominated Data Controllers per ministry at `data.gov.in/datacontrollers`.
+That register is how to identify the named DGE official to approach.
 
 The partnership route is nonetheless real and precedented: DGE / Ministry
 of Labour & Employment runs an active MoU programme with API integration

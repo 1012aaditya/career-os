@@ -798,6 +798,15 @@ signals   246 signals, coverageComplete true over the 10 readable boards
   `distinctCompanyCount = 1` is published next to it, so the number cannot
   be read as a market fact. Likewise `Scala` at 22% of Software Engineer
   postings across three employers.
+- **Two independent computations over the same observations produced
+  byte-identical counts.** 246 signals each, compared row by row on
+  (type, role, skill, numerator, denominator, company count), with no row
+  present in one and absent from the other.
+- **An unknown scope fails closed, demonstrated by accident.** A malformed
+  invocation passed all ten board tokens as a single scope string. The
+  computation returned zero signals and `coverageComplete: false` rather
+  than silently falling back to everything it had - which is the intended
+  behaviour, and it was observed rather than assumed.
 - **Role resolution reaches about a third of postings** (1001 of 2955).
   The unresolved majority is overwhelmingly non-engineering — account
   executive, program manager, sales — which is the vocabulary being

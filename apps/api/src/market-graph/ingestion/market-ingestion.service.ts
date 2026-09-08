@@ -142,7 +142,7 @@ export class MarketIngestionService {
     clock?: () => Date;
   }): Promise<IngestResult> {
     const clock = input.clock ?? (() => new Date());
-    const { adapter, client } = input.source;
+    const { adapter } = input.source;
 
     const source = await this.vocabulary.ensureSource(input.source);
 

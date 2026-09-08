@@ -581,11 +581,21 @@ export function normalizePosting(record: RawPostingRecord): NormalizedPosting {
   const title = normalizeTitle(record.titleRaw);
 
   /*
-   * The publisher's own classification wins over our reading of the title.
-   * It is the stronger evidence: the employer chose it, we only guessed at
-   * the title. The title match is kept as the fallback and its result is
-   * still what titleNormalized reports, so nothing about the backlog
-   * measurement changes.
+   * The occupational code is a FALLBACK, tried only where the title did
+   * not resolve.
+   *
+   * This ordering was the other way round and the corpus proved it wrong.
+   * Code-first changed 181 already-correct mappings, every one a loss of
+   * specificity: 27 postings whose titles said "Software Engineer" became
+   * it-specialist because OPM 2210 is the broad "Information Technology
+   * Management" series, frontend/backend/mobile engineers collapsed into
+   * software-engineer under one Swedish occupation label, and six data
+   * scientists became systems-analysts under NOC 21222.
+   *
+   * An authored alias is a precise claim about one role. An occupational
+   * code is a bucket a publisher files a job into, and the bucket is
+   * coarser than the title by design. So the specific wins, and the code
+   * answers only where we would otherwise have said nothing.
    */
   const codeRole = roleFromOccupationCode(
     record.occupationScheme,
@@ -635,9 +645,14 @@ export function normalizePosting(record: RawPostingRecord): NormalizedPosting {
   const body = {
     rulesetVersion: RULESET_VERSION,
     titleNormalized: title.titleNormalized,
-    roleSlug: codeRole ?? title.roleSlug,
+    /*
+     * Title first, code as fallback. See the note above roleFromOccupationCode.
+     */
+    roleSlug: title.roleSlug ?? codeRole,
     roleMatchMethod:
-      codeRole === null ? title.roleMatchMethod : 'SOURCE_TAXONOMY',
+      title.roleSlug !== null || codeRole === null
+        ? title.roleMatchMethod
+        : 'SOURCE_TAXONOMY',
     roleAliasKey: title.roleAliasKey,
     titleModifierRaw: title.titleModifierRaw,
     companyNormalized,

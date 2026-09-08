@@ -17,9 +17,22 @@
  * and "C#" to "c" - which would give two distinct skills one identity.
  */
 
-export const RULESET_VERSION = 4;
+export const RULESET_VERSION = 6;
 
 /*
+ * v6 is where the v5 correction actually took effect. The v5 edit was
+ * written but silently failed to apply - the file had been reformatted, so
+ * the text being replaced no longer existed - and v5 therefore re-ran v4's
+ * logic under a new number. Caught because v4 and v5 produced byte-identical
+ * match-method counts, which a real change could not have.
+ *
+ * v5 intended to correct v4's matching order. v4 tried the publisher's code BEFORE
+ * the title, and the corpus showed that was wrong: it changed 181
+ * already-correct mappings, every one a loss of specificity, because an
+ * occupational code is a coarser claim than a title by design. v5 tries
+ * the title first and falls back to the code, which keeps the resolution
+ * gain and the precision.
+ *
  * v4 added occupational-code matching, and the reason is a measurement.
  * v3's Unicode fix moved role resolution by exactly zero, because
  * resolution matched titles against 159 hand-authored aliases of which

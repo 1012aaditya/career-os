@@ -615,3 +615,72 @@ describe('determinism', () => {
     expect(normalized.skillExtractionStatus).not.toBe('EXTRACTED');
   });
 });
+
+describe('tokenizing beyond ASCII', () => {
+  /*
+   * The defect ruleset v3 fixes. TOKEN_CHARS was [a-z0-9+#./_-], so every
+   * character outside that set was a word boundary - and the corpus is not
+   * English. JobTech resolved 3.22% of its titles and Teaching Vacancies
+   * resolved none, and this is a large part of why.
+   */
+  it('keeps a Swedish compound whole instead of splitting on the umlaut', () => {
+    expect(tokenize('Mjukvaruingenjör')).toEqual(['mjukvaruingenjör']);
+  });
+
+  it.each([
+    ['French', 'Développeur Full Stack', ['développeur', 'full', 'stack']],
+    [
+      'Norwegian',
+      'Systemutvikler på Østlandet',
+      ['systemutvikler', 'på', 'østlandet'],
+    ],
+    ['Korean', '소프트웨어 개발자', ['소프트웨어', '개발자']],
+    ['German', 'Softwareentwickler (m/w/d)', ['softwareentwickler', 'm/w/d']],
+  ])('keeps %s text whole', (_language, input, expected) => {
+    expect(tokenize(input)).toEqual(expected);
+  });
+
+  /*
+   * The four punctuation marks that carry meaning inside a technology name
+   * must survive the change, or the fix would trade one broken language
+   * for a broken skill vocabulary.
+   */
+  it.each([
+    ['c++', ['c++']],
+    ['c#', ['c#']],
+    ['node.js', ['node.js']],
+    ['scikit-learn', ['scikit-learn']],
+    ['ci/cd', ['ci/cd']],
+    ['.net', ['.net']],
+  ])('still reads %s as one token', (input, expected) => {
+    expect(tokenize(input)).toEqual(expected);
+  });
+
+  it('is unchanged for pure ASCII, so v2 behaviour is preserved there', () => {
+    expect(tokenize('Senior Backend Engineer, Python')).toEqual([
+      'senior',
+      'backend',
+      'engineer',
+      'python',
+    ]);
+  });
+
+  /*
+   * NFKC can leave a sequence decomposed, so a combining accent arrives as
+   * its own code point. Without \p{M} it would be a boundary and would
+   * split its own word - the same defect in a subtler form.
+   */
+  it('keeps a combining accent attached to its base character', () => {
+    const decomposed = 'Developpé'.normalize('NFD');
+
+    expect(tokenize(decomposed)).toHaveLength(1);
+  });
+
+  it('still treats real separators as boundaries', () => {
+    expect(tokenize('Engineer, Backend | Remote')).toEqual([
+      'engineer',
+      'backend',
+      'remote',
+    ]);
+  });
+});

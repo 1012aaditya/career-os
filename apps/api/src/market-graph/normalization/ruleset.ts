@@ -17,9 +17,17 @@
  * and "C#" to "c" - which would give two distinct skills one identity.
  */
 
-export const RULESET_VERSION = 2;
+export const RULESET_VERSION = 3;
 
 /*
+ * v3 made the tokenizer Unicode-aware. TOKEN_CHARS was ASCII-only, so
+ * every non-Latin-alphabet character was a word boundary and every
+ * accented or non-English title fragmented: "Mjukvaruingenjor" (with an
+ * o-umlaut) became "mjukvaruingenj" + "r". The version moves because the
+ * same stored posting now normalizes differently - which is exactly what a
+ * ruleset version is for. v1 and v2 normalizations are retained, not
+ * rewritten, so published signals keep meaning what they meant.
+ *
  * v2 changed how titles and employer names are read. Every change is a
  * correction, and every one alters what already-ingested postings are
  * understood to say - so the version moves with them. A published number

@@ -63,8 +63,21 @@ export type NormalizedPosting = {
  * Getting this wrong is how a skill extractor breaks: split on all
  * punctuation and "c++" becomes "c", which then matches nothing and hides
  * a real skill; split on none and "javascript," never matches "javascript".
+ *
+ * UNICODE, from ruleset v3. This was [a-z0-9+#./_-], which is ASCII-only,
+ * and the consequence was not subtle: "Mjukvaruingenjor" with an o-umlaut
+ * tokenized to "mjukvaruingenj" + "r", because the umlaut was a boundary.
+ * Every non-English title fragmented the same way, which is a large part
+ * of why JobTech resolved 3.22% of its titles and Teaching Vacancies
+ * resolved none.
+ *
+ * \p{L} covers every script - Latin with diacritics, Hangul, Cyrillic,
+ * CJK. \p{N} covers every numeral. \p{M} keeps combining marks attached
+ * to their base character, which matters because NFKC leaves some
+ * sequences decomposed and without it an accent would split its own word.
+ * The four meaningful punctuation marks are unchanged.
  */
-const TOKEN_CHARS = /[a-z0-9+#./_-]+/g;
+const TOKEN_CHARS = /[\p{L}\p{N}\p{M}+#./_-]+/gu;
 
 /*
  * A leading dot is kept, because ".net" needs it. A trailing dot is not,

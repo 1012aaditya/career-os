@@ -20,6 +20,13 @@ export default defineConfig({
     include: [
       'src/career/**/*.test.ts',
       'src/github/**/*.test.ts',
+      /*
+       * Market Search's presentation logic. Pure for the same reason the
+       * others are: it decides what a result SAYS - what a missing
+       * employer renders as, what an UNAVAILABLE freshness verdict is
+       * allowed to be called - and those are claims, not layout.
+       */
+      'src/market/**/*.test.ts',
     ],
   },
 });

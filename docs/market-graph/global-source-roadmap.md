@@ -332,7 +332,20 @@ Acts, and departmental negative lists are not published. **The boundary of
 the GODL grant is therefore not fully knowable from the documents.** That
 is a property of the instrument, not a gap in the research.
 
-### NCS — PARTNERSHIP_REQUIRED, and the reason is structural
+### Two different sources share the name "NCS" — do not conflate them
+
+This distinction is easy to lose and expensive to lose:
+
+- **NCS data published on data.gov.in** — aggregate counts, GODL-licensed,
+  NOT_FEASIBLE as a postings source. This is a *data shape* problem that no
+  partnership fixes, because there are no vacancy rows to license.
+- **ncs.gov.in itself** — a separate source, holding ~1.77M live vacancies,
+  with an unknown licence and no published API. This is a *permission*
+  problem, and it is the one a partnership could solve.
+
+Everything below concerns the second.
+
+### NCS (ncs.gov.in) — PARTNERSHIP_REQUIRED, and the reason is structural
 
 NCS publishes individual postings and has no robots.txt. It also has two
 contradictory copyright policies live at once; the current one (v6.14,

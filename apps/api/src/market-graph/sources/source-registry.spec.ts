@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { GreenhouseClient } from './greenhouse/greenhouse.client.js';
 import { JobTechClient } from './jobtech/jobtech.client.js';
 import { MarketSourceRegistry } from './source-registry.js';
+import { JobicyClient } from './jobicy/jobicy.client.js';
+import { NavClient } from './nav-no/nav-no.client.js';
 import { TeachingVacanciesClient } from './teaching-vacancies/teaching-vacancies.client.js';
+import { UsaJobsHistoricClient } from './usajobs-historic/usajobs-historic.client.js';
 
 /*
  * The licence position, asserted rather than commented.
@@ -21,6 +24,9 @@ function registry(): MarketSourceRegistry {
     new GreenhouseClient(),
     new JobTechClient(),
     new TeachingVacanciesClient(),
+    new UsaJobsHistoricClient(),
+    new NavClient(),
+    new JobicyClient(),
   );
 }
 
@@ -30,7 +36,14 @@ describe('the source registry', () => {
       registry()
         .descriptors()
         .map((source) => source.slug),
-    ).toEqual(['greenhouse', 'jobtech', 'teaching-vacancies']);
+    ).toEqual([
+      'greenhouse',
+      'jobtech',
+      'teaching-vacancies',
+      'usajobs-historic',
+      'nav-no',
+      'jobicy',
+    ]);
   });
 
   /*

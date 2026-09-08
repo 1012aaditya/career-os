@@ -11,7 +11,10 @@ import {
 import { FakeShapeAdapter } from './fake-shape/fake-shape.adapter.js';
 import { GreenhouseAdapter } from './greenhouse/greenhouse.adapter.js';
 import { JobTechAdapter } from './jobtech/jobtech.adapter.js';
+import { JobicyAdapter } from './jobicy/jobicy.adapter.js';
+import { NavAdapter } from './nav-no/nav-no.adapter.js';
 import { TeachingVacanciesAdapter } from './teaching-vacancies/teaching-vacancies.adapter.js';
+import { UsaJobsHistoricAdapter } from './usajobs-historic/usajobs-historic.adapter.js';
 import type { SourceAdapter } from './source-adapter.js';
 
 /*
@@ -41,6 +44,8 @@ const CONTRACT_KEYS = [
   'sourceValidThrough',
   'titleRaw',
 ].sort();
+
+const SOURCES_DIR = fileURLToPath(new URL('./', import.meta.url));
 
 const ADAPTERS: Array<{
   name: string;
@@ -280,6 +285,155 @@ const ADAPTERS: Array<{
       data: [
         { title: 'First', url: 'https://example.invalid/7' },
         { title: 'Second', url: 'https://example.invalid/7' },
+      ],
+    },
+  },
+  {
+    /* Continuation-token pagination, and the first source that publishes
+     * no description at all - so the first to produce ABSENT. */
+    name: 'usajobs-historic',
+    make: () => new UsaJobsHistoricAdapter(),
+    page: {
+      paging: { metadata: { continuationToken: 'abc%3D%3D' } },
+      data: [
+        {
+          usajobsControlNumber: 309472900,
+          positionTitle: 'SENIOR INFORMATION TECHNOLOGY SPECIALIST',
+          hiringAgencyName: 'U.S. Mint',
+          hiringDepartmentName: 'Department of the Treasury',
+          positionOpenDate: '2020-02-14',
+          positionCloseDate: '2020-02-15',
+          positionExpireDate: null,
+          announcementNumber: '12-USMINT-202',
+          jobcategories: [{ series: '2210' }],
+          positionlocations: [
+            {
+              positionLocationCity: 'Washington',
+              positionLocationState: 'District of Columbia',
+            },
+          ],
+        },
+        {
+          usajobsControlNumber: 309000000,
+          positionTitle: 'DATA ENGINEER',
+          hiringAgencyName: 'U.S. Census Bureau',
+          positionOpenDate: '2021-05-01',
+          positionCloseDate: null,
+          jobcategories: [{ series: '1530' }],
+          positionlocations: [{ positionLocationCity: 'Suitland' }],
+        },
+      ],
+    },
+    pageWithNull: {
+      data: [null, { usajobsControlNumber: 1, positionTitle: 'Analyst' }],
+    },
+    pageMissingTitle: {
+      data: [
+        { usajobsControlNumber: 2 },
+        { usajobsControlNumber: 3, positionTitle: 'QA Engineer' },
+      ],
+    },
+    pageWithDuplicate: {
+      data: [
+        { usajobsControlNumber: 7, positionTitle: 'First' },
+        { usajobsControlNumber: 7, positionTitle: 'Second' },
+      ],
+    },
+  },
+  {
+    /* A JSON Feed, a status field that marks delistings, and a
+     * content_text that is a placeholder rather than a body. */
+    name: 'nav-no',
+    make: () => new NavAdapter(),
+    page: {
+      items: [
+        {
+          id: 'a1',
+          title: 'Systemutvikler',
+          content_text: 'Stillingsannonse',
+          date_modified: '2026-09-08T15:11:00.611811+02:00',
+          _feed_entry: {
+            uuid: 'a1',
+            status: 'ACTIVE',
+            title: 'Systemutvikler',
+            businessName: 'Eksempel AS',
+            municipal: 'OSLO',
+            sistEndret: '2026-09-08T15:11:00.611811+02:00',
+          },
+        },
+        {
+          id: 'a2',
+          title: 'Dataingenior',
+          date_modified: '2026-08-01T09:00:00.000000+02:00',
+          _feed_entry: {
+            uuid: 'a2',
+            status: 'ACTIVE',
+            businessName: 'Annen AS',
+            municipal: 'BERGEN',
+          },
+        },
+      ],
+    },
+    pageWithNull: {
+      items: [
+        null,
+        { id: 'b1', title: 'Data Engineer', _feed_entry: { uuid: 'b1' } },
+      ],
+    },
+    pageMissingTitle: {
+      items: [
+        { id: 'b2', _feed_entry: { uuid: 'b2' } },
+        { id: 'b3', title: 'QA Engineer', _feed_entry: { uuid: 'b3' } },
+      ],
+    },
+    pageWithDuplicate: {
+      items: [
+        { id: 'b7', title: 'First', _feed_entry: { uuid: 'b7' } },
+        { id: 'b7', title: 'Second', _feed_entry: { uuid: 'b7' } },
+      ],
+    },
+  },
+  {
+    /* No pagination at all: a rolling window the source serves whole. */
+    name: 'jobicy',
+    make: () => new JobicyAdapter(),
+    page: {
+      jobCount: 2,
+      jobs: [
+        {
+          id: 150169,
+          url: 'https://example.invalid/jobs/150169-care-manager',
+          jobTitle: 'Senior Backend Engineer',
+          companyName: 'Acme Remote',
+          jobIndustry: ['Software Engineering'],
+          jobType: ['Full-Time'],
+          jobLevel: 'Senior',
+          jobGeo: 'USA',
+          jobDescription: '<p>We use Python and Postgres.</p>',
+          jobExcerpt: 'We use Python...',
+          pubDate: '2026-09-08T05:10:08+00:00',
+        },
+        {
+          id: 150000,
+          url: 'https://example.invalid/jobs/150000-frontend',
+          jobTitle: 'Frontend Engineer',
+          companyName: 'Globex',
+          jobIndustry: ['Software Engineering'],
+          jobType: ['Contract'],
+          jobGeo: 'Europe',
+          jobDescription: '<p>React and TypeScript.</p>',
+          pubDate: '2026-08-01T05:10:08+00:00',
+        },
+      ],
+    },
+    pageWithNull: { jobs: [null, { id: 1, jobTitle: 'Data Engineer' }] },
+    pageMissingTitle: {
+      jobs: [{ id: 2 }, { id: 3, jobTitle: 'QA Engineer' }],
+    },
+    pageWithDuplicate: {
+      jobs: [
+        { id: 7, jobTitle: 'First' },
+        { id: 7, jobTitle: 'Second' },
       ],
     },
   },
@@ -540,11 +694,34 @@ describe('source rules', () => {
     expect(files.length).toBeGreaterThan(4);
   });
 
+  /*
+   * Both scans below take their source names from the FILESYSTEM, not from
+   * a hand-maintained list.
+   *
+   * The list was hand-maintained, and adding the third source proved why
+   * that fails: the regex still read (greenhouse|jobtech|fake-shape), so
+   * the check that stops an adapter leaking into a canonical layer had
+   * silently stopped covering the newest adapter - the one most likely to
+   * leak, because it is the one being written. A check that must be edited
+   * to keep working is a check that will eventually not be working.
+   */
+  const adapterDirs = readdirSync(SOURCES_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name);
+
+  it('found every adapter directory, so the scans below cover them all', () => {
+    expect(adapterDirs).toContain('greenhouse');
+    expect(adapterDirs).toContain('jobtech');
+    expect(adapterDirs.length).toBeGreaterThanOrEqual(ADAPTERS.length - 1);
+  });
+
   it('imports no adapter into any canonical module', () => {
+    const pattern = new RegExp(
+      `from\\s+'[^']*\\/(?:${adapterDirs.join('|')})\\/[^']+'`,
+    );
+
     const offenders = files.filter((file) =>
-      /from\s+'[^']*\/(?:greenhouse|jobtech|fake-shape)\/[^']+'/.test(
-        readFileSync(file, 'utf8'),
-      ),
+      pattern.test(readFileSync(file, 'utf8')),
     );
 
     expect(offenders).toEqual([]);
@@ -552,13 +729,18 @@ describe('source rules', () => {
 
   it('names no source anywhere in the canonical modules', () => {
     const keys = [
-      'greenhouse',
-      'jobtech',
-      'teaching-vacancies',
+      ...adapterDirs,
+      /*
+       * Sources assessed and rejected on licence grounds. Kept so that a
+       * future attempt to wire one in trips this check even before its
+       * directory exists.
+       */
       'adzuna',
       'jooble',
       'usajobs',
       'lever',
+      'lightcast',
+      'themuse',
     ];
 
     for (const file of files) {

@@ -3,7 +3,13 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { GreenhouseAdapter } from './greenhouse/greenhouse.adapter.js';
 import { GreenhouseClient } from './greenhouse/greenhouse.client.js';
 import { JobTechAdapter } from './jobtech/jobtech.adapter.js';
+import { JobicyAdapter } from './jobicy/jobicy.adapter.js';
+import { JobicyClient } from './jobicy/jobicy.client.js';
 import { JobTechClient } from './jobtech/jobtech.client.js';
+import { NavAdapter } from './nav-no/nav-no.adapter.js';
+import { NavClient } from './nav-no/nav-no.client.js';
+import { UsaJobsHistoricAdapter } from './usajobs-historic/usajobs-historic.adapter.js';
+import { UsaJobsHistoricClient } from './usajobs-historic/usajobs-historic.client.js';
 import type { SourceDescriptor } from './source-adapter.js';
 import { TeachingVacanciesAdapter } from './teaching-vacancies/teaching-vacancies.adapter.js';
 import { TeachingVacanciesClient } from './teaching-vacancies/teaching-vacancies.client.js';
@@ -31,6 +37,9 @@ export class MarketSourceRegistry {
     private readonly greenhouse: GreenhouseClient,
     private readonly jobtech: JobTechClient,
     private readonly teachingVacancies: TeachingVacanciesClient,
+    private readonly usajobs: UsaJobsHistoricClient,
+    private readonly nav: NavClient,
+    private readonly jobicy: JobicyClient,
   ) {}
 
   descriptors(): SourceDescriptor[] {
@@ -38,6 +47,9 @@ export class MarketSourceRegistry {
       this.greenhouseSource(),
       this.jobtechSource(),
       this.teachingVacanciesSource(),
+      this.usaJobsHistoricSource(),
+      this.navSource(),
+      this.jobicySource(),
     ];
   }
 
@@ -157,6 +169,72 @@ export class MarketSourceRegistry {
        * exploitation and redistribution outright, so aggregates derived
        * from this source may be shown to a reader.
        */
+      mayRedistributeDerived: true,
+    };
+  }
+
+  private usaJobsHistoricSource(): SourceDescriptor {
+    return {
+      slug: 'usajobs-historic',
+      displayName: 'USAJOBS Historic Announcements (US OPM)',
+      adapter: new UsaJobsHistoricAdapter(),
+      client: this.usajobs,
+      queryParams: { pageSize: 500 },
+      /*
+       * An affirmative statement on a live primary page, and it is
+       * available only because we do NOT register for a key.
+       *
+       * The USAJOBS Search API is reached by registration, and
+       * registration binds you to terms whose section 2 reads "You may not
+       * rent, lease, loan, sell, trade or create derivative works of
+       * USAJOBS API services and data, in whole or in part". A vacancy
+       * statistic is a derivative work, so that API is unusable here. This
+       * endpoint requires no registration and USAJOBS documents it as
+       * needing no authorization and being "publicly consumable".
+       */
+      licenceBasis: 'EXPLICIT_GRANT',
+      licenceNote:
+        'USAJOBS documents the Historic JOA endpoint as requiring no authorization or authentication, with data that is "publicly consumable" - verified live and unauthenticated on 2026-09-08 (125,717 records for series 2210). Backed by 17 U.S.C. 105, which denies copyright to US Government works. IMPORTANT: this position depends on NOT registering for an API key. The separate Search API is gated by a registration contract whose section 2 forbids creating derivative works, so it must not be used. Coverage: closed historic announcements only, US federal employers only - this is a record of past demand, not current vacancies. PII: verified across all 40 fields of a live record, none is a contact, email, phone or person name; the Search API and the AnnouncementText endpoint do carry named HR contacts and neither is read here.',
+      licenceReviewedAt: new Date('2026-09-08T00:00:00.000Z'),
+      isEnabled: true,
+      mayRedistributeDerived: true,
+    };
+  }
+
+  private navSource(): SourceDescriptor {
+    return {
+      slug: 'nav-no',
+      displayName: 'NAV Arbeidsplassen (Norway)',
+      adapter: new NavAdapter(),
+      client: this.nav,
+      queryParams: { pageSize: 100 },
+      /*
+       * The only source surveyed whose terms name statistical use in so
+       * many words. Note the trap: NAV's OpenAPI declares an MIT licence,
+       * which covers NAV's source code and NOT the data. The governing
+       * terms are the separate termsOfService document.
+       */
+      licenceBasis: 'EXPLICIT_GRANT',
+      licenceNote:
+        'NAV API terms (arbeidsplassen.nav.no/vilkar-api) grant consumers the right to republish received job ads "og/eller bruke dei til statistiske/analytiske formaal" - and/or use them for statistical and analytical purposes - free of charge and open to anyone. Verified live 2026-09-08. CAUTION: NAV\'s OpenAPI document declares an MIT licence which covers their SOURCE CODE, not the data; do not read it as a data grant. Obligations accepted: ads must be removed immediately once inactive (the adapter refuses non-ACTIVE entries, but there is no delisting record, which is a named residual), and the consumer is an independent GDPR controller. Coverage: Norway only, Norwegian-language titles, and the feed list carries no description - only the per-posting detail endpoint does, and it is not read - so this source contributes to volume and to no prevalence denominator. PII: the detail endpoint carries contactList with named individuals, email and phone; it is declared in the adapter\'s redaction profile against the day it is read.',
+      licenceReviewedAt: new Date('2026-09-08T00:00:00.000Z'),
+      isEnabled: true,
+      mayRedistributeDerived: true,
+    };
+  }
+
+  private jobicySource(): SourceDescriptor {
+    return {
+      slug: 'jobicy',
+      displayName: 'Jobicy (remote roles)',
+      adapter: new JobicyAdapter(),
+      client: this.jobicy,
+      queryParams: { count: 200 },
+      licenceBasis: 'EXPLICIT_GRANT',
+      licenceNote:
+        'Jobicy syndication terms grant reuse without individual permission: "You may use Jobicy listings in your own products and user experiences without requesting individual permission... You may create your own interfaces, summaries, categories, search experiences, and additional context around listings." Attribution and canonical URL retention required; polling limited to once per hour, which is an operator scheduling obligation this code does not enforce. Verified live 2026-09-08. Coverage limitation, and it is severe: the API serves a rolling window of the most recent listings with NO pagination, so a scope reads as complete because the source served everything it will serve - which is not the same as having read the market. Treat as a signal source, never a census.',
+      licenceReviewedAt: new Date('2026-09-08T00:00:00.000Z'),
+      isEnabled: true,
       mayRedistributeDerived: true,
     };
   }

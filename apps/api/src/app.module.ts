@@ -7,6 +7,7 @@ import { HealthController } from './health.controller.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { ResumeImportModule } from './resume-import/resume-import.module.js';
 import { IntegrationsModule } from './integrations/integrations.module.js';
+import { MarketGraphModule } from './market-graph/market-graph.module.js';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { IntegrationsModule } from './integrations/integrations.module.js';
     ResumeProcessingModule,
     CareerGraphModule,
     IntegrationsModule,
+    MarketGraphModule,
   ],
   controllers: [HealthController],
 })

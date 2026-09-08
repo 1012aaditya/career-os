@@ -875,3 +875,42 @@ source size:
 **What should not be done:** adding more aggregators. Eleven were assessed
 and one was usable. The category has been tested sufficiently to stop
 spending engineering time on it.
+
+---
+
+## Data brokers — the ATS ownership problem, one layer up
+
+Five commercial job-data vendors assessed: Aspen Tech Labs, Revelio Labs,
+Techsalerator, Bright Data, Oxylabs.
+
+**None states in published terms that it has obtained the employer's
+copyright licence to the posting description, and none warrants
+non-infringement or offers an IP indemnity to the buyer.** Every one either
+restricts you to internal business use, or grants redistribution of
+something it does not own.
+
+| Vendor | Source | Redistribution | Class |
+|---|---|---|---|
+| Aspen Tech Labs | employer career pages + ATS (crawled) | "with prior written consent" — **unverified, site 403s** | PARTNERSHIP_REQUIRED |
+| Revelio Labs | crawl of company sites + boards | public ToU: "internal business use... not for any other use, including any commercial use" | RESEARCH_REQUIRED |
+| Techsalerator | web scraping, mixed | **no published licence terms at all** | RESEARCH_REQUIRED |
+| Bright Data | scrapes LinkedIn/Indeed/Glassdoor | no affirmative grant; customer indemnifies Bright Data | SCRAPING_ONLY |
+| Oxylabs | scrapes Indeed/Glassdoor | §4.2.8 permits Derived Data — but Oxylabs asserts it owns the scraped text | SCRAPING_ONLY |
+
+**Buying from a broker changes who you pay; it does not change who owns the
+copyright.** Oxylabs is the sharpest illustration: it has the best
+redistribution clause of the five *and* asserts ownership of scraped
+postings it plainly does not author. The contract lets you redistribute; it
+does not give you the right to.
+
+**Aspen is the only one worth a conversation** — the only vendor whose
+stated pipeline (employer career pages and ATS, not job boards) makes an
+employer-copyright story even conceivable, and whose restriction reads as a
+negotiable consent gate rather than a bar.
+
+**A structural alternative none of them offers, and worth costing first:**
+ingest title, company, location, dates and a deep link to the employer's
+own posting, and never copy the description body. Facts are not
+copyrightable expression. That sidesteps the entire licensing question for
+the metadata layer, at the cost of the skills extraction that depends on
+body text.

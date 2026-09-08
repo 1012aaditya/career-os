@@ -128,3 +128,42 @@ Two consequences follow and neither is hidden:
   is a `RULESET_VERSION` bump and a full re-normalization — one migration
   now, or five after five non-English sources land. Deferred, deliberately,
   and named here so the cost is visible.
+
+---
+
+## Live verification, 2026-09-08
+
+| Source | Status | Live verified | Scopes read/complete | Postings | Role-resolved |
+|---|---|---|---|---|---|
+| jobtech | enabled | yes | 5 / 2 | 6671 | 215 |
+| teaching-vacancies | enabled | yes | 1 / 1 | 3140 | **0** |
+| usajobs-historic | enabled | yes | 1 / **0** | 10000 | 31 |
+| jobicy | enabled | yes | 1 / 1 | 200 | 42 |
+| canada-job-bank | enabled | yes | 1 / 1 | 53,800-scale | **0** |
+| greenhouse | **disabled** | previously | 10 / 10 | 2957 | 2169 |
+| nav-no | **disabled** | yes — and it is why it is disabled | 1 / **0** | 0 accepted, 20000 refused | 0 |
+
+Three distinct real-world causes of PARTIAL are now live and reproducible,
+which is worth more than the count: a dead scope (Greenhouse's `benchling`
+404s), a server-side result cap (JobTech's 2000-ad offset ceiling), and a
+client page ceiling reached against a larger corpus (USAJOBS, 10,000 of
+125,717). None of them reports SUCCEEDED.
+
+## Redaction is not retroactive, and that matters
+
+Every source ingested after contact redaction landed stores **zero** email
+addresses in either `descriptionRaw` or `rawPayload` — verified across
+Teaching Vacancies, USAJOBS, Jobicy and Canada. The pre-existing JobTech
+rows still carry 2320 in descriptions and 2700 in payloads, and Greenhouse
+389.
+
+Re-ingesting does **not** clean them. `CONTENT_HASH_VERSION` moved to 2, so
+a re-ingest mints new, redacted versions alongside the old ones rather than
+replacing them — which is the labelled split working as designed, and is
+visible in the corpus as 9,629 versions at version 1 and 58,126 at
+version 2. The only mechanism that removes the old rows is the source
+purge.
+
+**So the honest position is: redaction protects every future observation
+and no past one.** Remediating the existing JobTech and Greenhouse rows is
+a purge-and-re-ingest, and it has not been done.

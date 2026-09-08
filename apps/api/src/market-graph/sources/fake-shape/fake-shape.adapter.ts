@@ -1,3 +1,4 @@
+import type { ContactRedaction } from '../../observations/redaction.js';
 import { optionalString } from '../../observations/values.js';
 import type {
   AdapterParseResult,
@@ -96,6 +97,12 @@ export class FakeShapeAdapter implements SourceAdapter {
    * be stored as.
    */
   readonly identityBasis: IdentityBasis = 'SOURCE_ID';
+
+  /* Nothing source-specific; the universal patterns are the whole rule. */
+  readonly contactRedaction: ContactRedaction = {
+    structuredFields: [],
+    nationalPhone: null,
+  };
 
   parse(body: unknown, sourceScope: string): AdapterParseResult {
     const accepted: RawPostingRecord[] = [];

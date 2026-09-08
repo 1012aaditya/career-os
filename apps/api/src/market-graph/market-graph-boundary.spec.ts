@@ -448,6 +448,13 @@ describe('what the Market Graph may not store or serve', () => {
       ),
     );
 
+    /*
+     * Non-vacuity. The scan names one file, so splitting the read logic
+     * out of it would leave this passing over nothing.
+     */
+    expect(code.length).toBeGreaterThan(2000);
+    expect(code).toContain('explainSignal');
+
     for (const forbidden of [
       'descriptionRaw',
       'descriptionText',
@@ -455,6 +462,63 @@ describe('what the Market Graph may not store or serve', () => {
     ]) {
       expect(`${forbidden}: ${code.includes(forbidden)}`).toBe(
         `${forbidden}: false`,
+      );
+    }
+  });
+
+  /*
+   * The hole a string scan cannot see.
+   *
+   * Naming a forbidden column is not the only way to serve it: a Prisma
+   * read with no `select` returns EVERY scalar column, so a findMany on
+   * MarketPostingVersion without one would serve descriptionRaw while the
+   * scan above reported clean. Every read on this path must name its
+   * columns. groupBy and count return no columns and are not matched.
+   */
+  it('names the columns of every read, so none can return a whole row', () => {
+    const code = stripComments(
+      readFileSync(
+        fileURLToPath(new URL('./market-graph.service.ts', import.meta.url)),
+        'utf8',
+      ),
+    );
+
+    const reads = [
+      ...code.matchAll(
+        /\.(findMany|findFirst|findUnique|findUniqueOrThrow)\(/g,
+      ),
+    ];
+
+    expect(reads.length).toBeGreaterThan(5);
+
+    for (const read of reads) {
+      /*
+       * The call's OWN argument object, found by matching parentheses.
+       * A fixed-size window forward does not work: it reaches into the
+       * next query and finds ITS select, so removing a select here left
+       * the check passing. Proven by mutation, which is why it is written
+       * this way.
+       */
+      const open = (read.index ?? 0) + read[0].length - 1;
+      let depth = 0;
+      let close = open;
+
+      for (let i = open; i < code.length; i += 1) {
+        if (code[i] === '(') depth += 1;
+        if (code[i] === ')') {
+          depth -= 1;
+
+          if (depth === 0) {
+            close = i;
+            break;
+          }
+        }
+      }
+
+      const argument = code.slice(open, close);
+
+      expect(`${read[1]}@${open}: ${argument.includes('select:')}`).toBe(
+        `${read[1]}@${open}: true`,
       );
     }
   });

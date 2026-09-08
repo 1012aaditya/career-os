@@ -12,6 +12,7 @@ import {
   postingExternalId,
   rawPayloadHash,
 } from '../observations/posting-identity.js';
+import { redactRecord } from '../observations/redaction.js';
 import type {
   IdentityBasis,
   RawPostingRecord,
@@ -43,6 +44,19 @@ import { MarketVocabularyService } from './market-vocabulary.service.js';
 
 /** A ceiling, so a bad scope list can never become an unbounded crawl. */
 const MAX_SCOPES_PER_RUN = 100;
+
+/*
+ * The shape a scope may take, checked BEFORE the network walk.
+ *
+ * The authority is the CHECK constraint on MarketPosting.sourceScope; this
+ * mirrors it, and a boundary test asserts every copy of this pattern in
+ * the tree is identical to the constraint. Checked here because the
+ * constraint fires mid-persistPosting, i.e. after a whole scope has been
+ * fetched over HTTP - so a source scoped by ISO country code ("GB", "US")
+ * would spend the entire walk before failing on the first row it tried to
+ * write. Signal computation already validated this; ingestion never did.
+ */
+const SCOPE_SHAPE = /^[a-z0-9*][a-z0-9._*-]*$/;
 
 /**
  * Was this a unique violation on the constraint we expected?
@@ -174,6 +188,14 @@ export class MarketIngestionService {
       );
     }
 
+    const malformed = requested.filter((scope) => !SCOPE_SHAPE.test(scope));
+
+    if (malformed.length > 0) {
+      throw new ConflictException(
+        `Malformed scopes: ${malformed.join(', ')}`,
+      );
+    }
+
     const run = await this.runs.start({
       sourceId: source.id,
       adapterVersion: adapter.adapterVersion,
@@ -186,6 +208,56 @@ export class MarketIngestionService {
       },
       now: input.now,
     });
+
+    /*
+     * Everything from here to `finish` runs inside a try, and the catch
+     * closes the run.
+     *
+     * Two try/catch blocks already existed - one around a page fetch, one
+     * around the sighting insert - and neither covered the scope loop or
+     * persistPosting. So any other throw (a constraint violation, a
+     * parameter-limit error, an OOM on a large payload) escaped with the
+     * run still RUNNING, and the partial unique index then blocked EVERY
+     * later run for that source until the 30-minute lease expired, with no
+     * errorReason recorded. 8.8 fixed exactly this for signal runs and
+     * left the path with the network in it untouched. `fail` had been
+     * written for this and had no callers at all.
+     */
+    try {
+      return await this.runScopes({
+        run,
+        source,
+        descriptor: input.source,
+        requested,
+        now: input.now,
+        clock,
+      });
+    } catch (error) {
+      /*
+       * A short fixed code. The caught error is never inspected, never
+       * stored and never logged - a source that needs a credential would
+       * otherwise put it in the database via its own error message.
+       */
+      await this.runs.fail({
+        runId: run.id,
+        reason: 'ingestion_aborted',
+        now: clock(),
+      });
+
+      throw error;
+    }
+  }
+
+  private async runScopes(context: {
+    run: { id: string };
+    source: { id: string; slug: string };
+    descriptor: SourceDescriptor;
+    requested: string[];
+    now: Date;
+    clock: () => Date;
+  }): Promise<IngestResult> {
+    const { run, source, descriptor, requested, now, clock } = context;
+    const { adapter, client } = descriptor;
 
     const runRow = await this.prisma.marketIngestionRun.findUniqueOrThrow({
       where: { id: run.id },
@@ -205,7 +277,7 @@ export class MarketIngestionService {
         );
       }
 
-      const walk = await this.walkScope({ source: input.source, scope, clock });
+      const walk = await this.walkScope({ source: descriptor, scope, clock });
 
       if (walk.failureReason !== null) {
         const failed: ScopeCoverage = {
@@ -251,7 +323,7 @@ export class MarketIngestionService {
           runSeq: runRow.runSeq,
           record,
           observedAt: walk.observedAt,
-          capturedAt: input.now,
+          capturedAt: now,
           pageIndex: scopeOrdinal,
           indexInPage: position,
         });
@@ -372,7 +444,21 @@ export class MarketIngestionService {
 
       const parsed = adapter.parse(fetched.body, input.scope);
 
-      accepted.push(...parsed.accepted);
+      /*
+       * Redacted here, by the pipeline, and not left to the adapter.
+       *
+       * An adapter MAY also redact - JobTech does, and its own tests check
+       * it - and doing both is safe because the operation is idempotent:
+       * the sentinels contain no address and no number. What this line
+       * buys is that forgetting is not possible. Applied before dedupe and
+       * therefore before every hash, so what a version commits to is the
+       * redacted text.
+       */
+      accepted.push(
+        ...parsed.accepted.map((record) =>
+          redactRecord(record, adapter.contactRedaction),
+        ),
+      );
       rejected += parsed.rejected.length;
       cursor = fetched.nextCursor;
 

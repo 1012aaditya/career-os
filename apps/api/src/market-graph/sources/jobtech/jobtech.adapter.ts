@@ -1,4 +1,8 @@
 import { optionalString } from '../../observations/values.js';
+import {
+  type ContactRedaction,
+  redactPayload,
+} from '../../observations/redaction.js';
 import type {
   AdapterParseResult,
   IdentityBasis,
@@ -163,33 +167,31 @@ export function epochMillisInstant(value: unknown): string | null {
  * leaving it to convention - but the honest claim is narrower than the
  * one this comment used to make on its own.
  */
-const CONTACT_FIELDS = ['application_contacts'] as const;
-
-const EMPLOYER_CONTACT_FIELDS = ['email', 'phone_number'] as const;
-
-function withoutContactDetails(
-  job: Record<string, unknown>,
-): Record<string, unknown> {
-  const stripped: Record<string, unknown> = { ...job };
-
-  for (const field of CONTACT_FIELDS) {
-    delete stripped[field];
-  }
-
-  const employer = asRecord(stripped.employer);
-
-  if (employer !== null) {
-    const cleanEmployer: Record<string, unknown> = { ...employer };
-
-    for (const field of EMPLOYER_CONTACT_FIELDS) {
-      delete cleanEmployer[field];
-    }
-
-    stripped.employer = cleanEmployer;
-  }
-
-  return stripped;
-}
+/*
+ * The contact fields this source publishes, by path.
+ *
+ * `application_details.email` was NOT in this list until 8.10, and it is
+ * the reason the list is now expressed as paths rather than as two
+ * hand-rolled loops: 639 stored rows carry an address there, 442 distinct,
+ * 153 of firstname.lastname@ shape - and 380 of them appear in no other
+ * column, so every audit run against the description body reported clean
+ * while they sat in the payload.
+ *
+ * The Swedish mobile pattern is here rather than in the shared module for
+ * the same reason the occupational-field map is in the client: it is
+ * knowledge about one market, and the canonical layers must not acquire
+ * it. The international +46 form needs no entry - the shared pattern
+ * already catches anything with a country code.
+ */
+const JOBTECH_REDACTION: ContactRedaction = {
+  structuredFields: [
+    'application_contacts',
+    'employer.email',
+    'employer.phone_number',
+    'application_details.email',
+  ],
+  nationalPhone: /\b07[02369][-\s]?\d{3}[-\s]?\d{2}[-\s]?\d{2}\b/,
+};
 
 /** Concept labels, ordered by us so a reshuffle cannot change the hash. */
 function taxonomyLabels(job: Record<string, unknown>): string[] {
@@ -227,6 +229,8 @@ export class JobTechAdapter implements SourceAdapter {
    * posting rather than assumed.
    */
   readonly identityBasis: IdentityBasis = 'SOURCE_ID';
+
+  readonly contactRedaction: ContactRedaction = JOBTECH_REDACTION;
 
   parse(body: unknown, sourceScope: string): AdapterParseResult {
     const accepted: RawPostingRecord[] = [];
@@ -314,7 +318,7 @@ export class JobTechAdapter implements SourceAdapter {
          * stored as such rather than inferred.
          */
         externalGroupKey: optionalString(employer?.organization_number),
-        payload: withoutContactDetails(job),
+        payload: redactPayload(job, JOBTECH_REDACTION),
       });
     });
 

@@ -74,3 +74,69 @@ describe('the source registry', () => {
     }
   });
 });
+
+describe('what a descriptor may carry', () => {
+  /*
+   * queryParams is stored VERBATIM on every ingestion run and hashed into
+   * queryFingerprint - which GET /v1/market/signals/:id serves. So a
+   * credential put here would become a plaintext secret in the database
+   * and, because the rest of the object is public in this file, a
+   * brute-forceable commitment to that secret served over HTTP.
+   *
+   * No source needs a key today. The first authenticated one will, and the
+   * obvious place to put it is exactly here - which is why this test
+   * exists before that source does. A key belongs in the client, read from
+   * configuration, sent as a header.
+   *
+   * user-agent is in the pattern deliberately: USAJOBS requires the
+   * operator's own email address as a User-Agent header, which is both a
+   * credential and personal data.
+   */
+  const CREDENTIAL_SHAPED =
+    /key|token|secret|auth|password|credential|bearer|user-?agent/i;
+
+  it('carries no credential-shaped key in queryParams', () => {
+    for (const source of registry().descriptors()) {
+      const offending = Object.keys(source.queryParams).filter((key) =>
+        CREDENTIAL_SHAPED.test(key),
+      );
+
+      expect(`${source.slug}: ${offending.join(',')}`).toBe(`${source.slug}: `);
+    }
+  });
+
+  it('carries no credential-shaped VALUE in queryParams either', () => {
+    for (const source of registry().descriptors()) {
+      for (const value of Object.values(source.queryParams)) {
+        /*
+         * A long opaque string is what an API key looks like. Every real
+         * queryParams value is a short enum, a number or a boolean.
+         */
+        expect(
+          typeof value === 'string' && value.length > 40 ? source.slug : 'ok',
+        ).toBe('ok');
+      }
+    }
+  });
+
+  it('detects a planted credential, so the checks above are not vacuous', () => {
+    expect(CREDENTIAL_SHAPED.test('apiKey')).toBe(true);
+    expect(CREDENTIAL_SHAPED.test('Authorization-Key')).toBe(true);
+    expect(CREDENTIAL_SHAPED.test('User-Agent')).toBe(true);
+    expect(CREDENTIAL_SHAPED.test('pageSize')).toBe(false);
+  });
+
+  /*
+   * Required by the type, so this cannot regress silently - but a source
+   * could still declare an empty profile without anyone asking whether
+   * that is true of its market. This is the line that makes it a decision.
+   */
+  it('declares a contact-redaction profile for every source', () => {
+    for (const source of registry().descriptors()) {
+      expect(
+        Array.isArray(source.adapter.contactRedaction.structuredFields),
+      ).toBe(true);
+      expect(source.adapter.contactRedaction.nationalPhone).not.toBeUndefined();
+    }
+  });
+});

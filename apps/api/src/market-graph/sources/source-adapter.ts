@@ -1,3 +1,5 @@
+import type { ContactRedaction } from '../observations/redaction.js';
+
 /*
  * The contract every market source adapter satisfies.
  *
@@ -107,6 +109,18 @@ export interface SourceAdapter {
   readonly identityBasis: IdentityBasis;
 
   /**
+   * What this source needs removed before anything is stored.
+   *
+   * Required, so adding an adapter is a moment where somebody has to
+   * answer "what contact details does this source publish?" rather than a
+   * moment where the question can be skipped. The universal patterns -
+   * addresses, mailto:, international numbers - are applied by the
+   * pipeline whatever this says, so an adapter can only ADD to the
+   * removal, never opt out of it.
+   */
+  readonly contactRedaction: ContactRedaction;
+
+  /**
    * One response body into records. Pure and total: it returns rejections
    * rather than throwing, for any input at all including `null`.
    */
@@ -131,6 +145,8 @@ export interface SourceAdapter {
  */
 
 /** One page of one scope. A source with no pagination returns cursor null. */
+export type { ContactRedaction };
+
 export type SourcePage = {
   body: unknown;
   /** Opaque and source-defined. Null means the scope is exhausted. */

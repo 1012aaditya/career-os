@@ -1,3 +1,4 @@
+import type { ContactRedaction } from '../../observations/redaction.js';
 import {
   numericKey,
   optionalInstant,
@@ -112,6 +113,20 @@ export class GreenhouseAdapter implements SourceAdapter {
    * risk. This is the main reason this source was chosen first.
    */
   readonly identityBasis: IdentityBasis = 'SOURCE_ID';
+
+  /*
+   * No structured contact fields: a Greenhouse board is written by a
+   * recruiting team into a templated CMS, and the ATS is itself the
+   * application channel, so there is no reason to publish a direct line.
+   * Measured on the stored corpus - 389 rows carry an address, but they
+   * are exactly THREE addresses, all accessibility and accommodations
+   * inboxes repeated across whole boards. Corporate contact data, not
+   * personal data. The universal patterns still run over the body.
+   */
+  readonly contactRedaction: ContactRedaction = {
+    structuredFields: [],
+    nationalPhone: null,
+  };
 
   parse(body: unknown, sourceScope: string): AdapterParseResult {
     const accepted: RawPostingRecord[] = [];

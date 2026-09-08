@@ -12,6 +12,7 @@ import { GreenhouseClient } from './sources/greenhouse/greenhouse.client.js';
 import { JobTechClient } from './sources/jobtech/jobtech.client.js';
 import { MarketSourcePurgeService } from './sources/market-source-purge.service.js';
 import { MarketSourceRegistry } from './sources/source-registry.js';
+import { CanadaJobBankClient } from './sources/canada-job-bank/canada-job-bank.client.js';
 import { JobicyClient } from './sources/jobicy/jobicy.client.js';
 import { NavClient } from './sources/nav-no/nav-no.client.js';
 import { TeachingVacanciesClient } from './sources/teaching-vacancies/teaching-vacancies.client.js';
@@ -55,6 +56,7 @@ import { UsaJobsHistoricClient } from './sources/usajobs-historic/usajobs-histor
     UsaJobsHistoricClient,
     NavClient,
     JobicyClient,
+    CanadaJobBankClient,
     MarketSourceRegistry,
     MarketVocabularyService,
     MarketIngestionRunService,

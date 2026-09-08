@@ -1394,3 +1394,84 @@ that is why it drifted.
   not enforced. The source filter incidentally removed the live leak — a
   non-redistributable source's postings were being served as evidence for a
   redistributable source's signal — but the column still gates nothing.
+
+---
+
+# Phase 8.10 — the source expansion
+
+Phase 8 was reopened to take the Market Graph from two sources to seven or
+more. The headline result is not the number: it is that **six of the seven
+originally named candidates turned out to be legally unusable**, and the
+count was reached by finding different sources rather than by softening the
+rule. Full evidence in `source-expansion.md`.
+
+## What the contract cost
+
+Four adapters were added. Each needed:
+
+- an adapter and a client (two files, in `sources/<name>/`)
+- one `SourceDescriptor` in the registry, one provider in the core module
+- one `ADAPTERS` entry in the contract spec, which adds exactly 17 tests
+
+and needed **zero** migrations, **zero** schema changes, **zero** routes,
+and no edit to ingestion, normalization, signal projection or the CLI. The
+"a seventh source is a registry entry plus a directory" claim held, and it
+held for shapes the first two sources had not exercised: a page-number
+cursor, an opaque continuation token, a bearer token, and no pagination at
+all.
+
+Two things did have to change, and neither was the canonical model:
+
+- `MarketSourceRegistry`'s constructor grew four dependencies.
+- The contract spec's canonical-layer scans now derive source names from
+  the filesystem instead of a hand-written list. That was overdue: adding
+  the third source proved the list had already gone stale, so the check
+  that stops an adapter leaking into `signals/` had silently stopped
+  covering the newest adapter — the one most likely to leak.
+
+## Branches these sources executed for the first time
+
+- **`descriptionCompleteness: 'ABSENT'`** — USAJOBS Historic publishes no
+  body at all, and NAV's feed publishes a placeholder rather than one. All
+  9,629 existing versions were `FULL`, so `postingsExcludedNotEligible` had
+  never been anything but zero and the exclusion branch had only ever run
+  against the fake adapter.
+- **`identityBasis: 'SOURCE_URL'`** — Teaching Vacancies publishes no id of
+  any kind. `BASIS_TAG` had a `url` entry no row had ever used.
+- **A credential** — NAV. Nothing had needed one, and the security review
+  found that the obvious place to put a key (`queryParams`) is stored
+  verbatim on every run and hashed into a fingerprint the API serves.
+
+## What the market now looks like, and what it does not
+
+Six sources ingest. **Four of them contribute to `ROLE_POSTING_VOLUME` and
+to no `ROLE_SKILL_PREVALENCE` denominator at all** — two because they
+publish no readable description, two because their titles do not resolve
+against a tech-oriented vocabulary. Teaching Vacancies resolved **0 of
+3140** titles.
+
+That is worth stating plainly rather than burying: adding sources increased
+the number of postings observed far more than it increased the number of
+signals that can be published. The completeness contract is why — a posting
+whose requirements were never read must not dilute a statistic about
+requirements — but a reader should not have to infer it from a suppression
+count.
+
+The single highest-leverage fix is not another source. It is
+`TOKEN_CHARS`, which is ASCII-only, so `Mjukvaruingenjör` tokenizes to
+`mjukvaruingenj` + `r`. It is a `RULESET_VERSION` bump and a full
+re-normalization: one migration now, five after five more non-English
+sources. Deferred deliberately.
+
+## The read API had to change first
+
+`latestSignalRun` had no source predicate, so `/v1/market/snapshot` and
+`/v1/market/signals` served whichever computation finished last — with two
+sources that was decided by 591 milliseconds, and for 51 minutes it served
+aggregates from the source whose descriptor forbids redistributing them.
+At six sources that would have been a lottery over what "the market" means.
+
+Reads are now restricted to sources whose licence permits derived
+aggregates to be shown, take an optional `?source=`, and name the chosen
+source in every response. This is the first thing `mayRedistributeDerived`
+has ever been read by.

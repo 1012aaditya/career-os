@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { GreenhouseClient } from './greenhouse/greenhouse.client.js';
 import { JobTechClient } from './jobtech/jobtech.client.js';
 import { MarketSourceRegistry } from './source-registry.js';
+import { CanadaJobBankClient } from './canada-job-bank/canada-job-bank.client.js';
 import { JobicyClient } from './jobicy/jobicy.client.js';
 import { NavClient } from './nav-no/nav-no.client.js';
 import { TeachingVacanciesClient } from './teaching-vacancies/teaching-vacancies.client.js';
@@ -27,6 +28,7 @@ function registry(): MarketSourceRegistry {
     new UsaJobsHistoricClient(),
     new NavClient(),
     new JobicyClient(),
+    new CanadaJobBankClient(),
   );
 }
 
@@ -43,6 +45,7 @@ describe('the source registry', () => {
       'usajobs-historic',
       'nav-no',
       'jobicy',
+      'canada-job-bank',
     ]);
   });
 

@@ -11,6 +11,7 @@ import {
 import { FakeShapeAdapter } from './fake-shape/fake-shape.adapter.js';
 import { GreenhouseAdapter } from './greenhouse/greenhouse.adapter.js';
 import { JobTechAdapter } from './jobtech/jobtech.adapter.js';
+import { CanadaJobBankAdapter } from './canada-job-bank/canada-job-bank.adapter.js';
 import { JobicyAdapter } from './jobicy/jobicy.adapter.js';
 import { NavAdapter } from './nav-no/nav-no.adapter.js';
 import { TeachingVacanciesAdapter } from './teaching-vacancies/teaching-vacancies.adapter.js';
@@ -437,6 +438,102 @@ const ADAPTERS: Array<{
       ],
     },
   },
+  {
+    /* Not JSON at all: rows decoded from a UTF-16LE tab-separated file.
+     * The contract's parse(body: unknown) needed no change for it. */
+    name: 'canada-job-bank',
+    make: () => new CanadaJobBankAdapter(),
+    page: {
+      rows: [
+        {
+          'WIC Job Location Snapshot ID': '1001',
+          'Job Title': 'Senior Software Engineer',
+          'Original Job Title': 'x',
+          'NOC 2016 Code': '2173',
+          'NOC 2016 Code Name': 'Software engineers',
+          'NOC21 Code': '21231',
+          'NOC21 Code Name': 'Software engineers and designers',
+          'First Posting Date': '2026/08/07',
+          City: 'Toronto',
+          'Province/Territory': 'Ontario',
+        },
+        {
+          'WIC Job Location Snapshot ID': '1002',
+          'Job Title': 'Data Analyst',
+          'Original Job Title': 'x',
+          'NOC 2016 Code': '2173',
+          'NOC 2016 Code Name': 'Software engineers',
+          'NOC21 Code': '21231',
+          'NOC21 Code Name': 'Software engineers and designers',
+          'First Posting Date': '2026/08/07',
+          City: 'Vancouver',
+          'Province/Territory': 'Ontario',
+        },
+      ],
+    },
+    pageWithNull: {
+      rows: [
+        null,
+        {
+          'WIC Job Location Snapshot ID': '4',
+          'Job Title': 'Data Engineer',
+          'Original Job Title': 'x',
+          'NOC 2016 Code': '2173',
+          'NOC 2016 Code Name': 'Software engineers',
+          'NOC21 Code': '21231',
+          'NOC21 Code Name': 'Software engineers and designers',
+          'First Posting Date': '2026/08/07',
+          City: 'Toronto',
+          'Province/Territory': 'Ontario',
+        },
+      ],
+    },
+    pageMissingTitle: {
+      rows: [
+        { 'WIC Job Location Snapshot ID': '5' },
+        {
+          'WIC Job Location Snapshot ID': '6',
+          'Job Title': 'QA Engineer',
+          'Original Job Title': 'x',
+          'NOC 2016 Code': '2173',
+          'NOC 2016 Code Name': 'Software engineers',
+          'NOC21 Code': '21231',
+          'NOC21 Code Name': 'Software engineers and designers',
+          'First Posting Date': '2026/08/07',
+          City: 'Toronto',
+          'Province/Territory': 'Ontario',
+        },
+      ],
+    },
+    pageWithDuplicate: {
+      rows: [
+        {
+          'WIC Job Location Snapshot ID': '7',
+          'Job Title': 'First',
+          'Original Job Title': 'x',
+          'NOC 2016 Code': '2173',
+          'NOC 2016 Code Name': 'Software engineers',
+          'NOC21 Code': '21231',
+          'NOC21 Code Name': 'Software engineers and designers',
+          'First Posting Date': '2026/08/07',
+          City: 'Toronto',
+          'Province/Territory': 'Ontario',
+        },
+        {
+          'WIC Job Location Snapshot ID': '7',
+          'Job Title': 'Second',
+          'Original Job Title': 'x',
+          'NOC 2016 Code': '2173',
+          'NOC 2016 Code Name': 'Software engineers',
+          'NOC21 Code': '21231',
+          'NOC21 Code Name': 'Software engineers and designers',
+          'First Posting Date': '2026/08/07',
+          City: 'Toronto',
+          'Province/Territory': 'Ontario',
+        },
+      ],
+    },
+  },
 ];
 
 it('runs against at least two adapters of different shape', () => {
@@ -781,7 +878,7 @@ function stripComments(code: string): string {
  * of quietly buying a free pass.
  */
 function reverseItems(page: Record<string, unknown>): void {
-  for (const key of ['jobs', 'hits', 'data', 'items'] as const) {
+  for (const key of ['jobs', 'hits', 'data', 'items', 'rows'] as const) {
     const value = page[key];
 
     if (Array.isArray(value)) {

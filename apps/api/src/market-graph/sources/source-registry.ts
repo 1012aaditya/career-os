@@ -1,5 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 
+import { CanadaJobBankAdapter } from './canada-job-bank/canada-job-bank.adapter.js';
+import { CanadaJobBankClient } from './canada-job-bank/canada-job-bank.client.js';
 import { GreenhouseAdapter } from './greenhouse/greenhouse.adapter.js';
 import { GreenhouseClient } from './greenhouse/greenhouse.client.js';
 import { JobTechAdapter } from './jobtech/jobtech.adapter.js';
@@ -40,6 +42,7 @@ export class MarketSourceRegistry {
     private readonly usajobs: UsaJobsHistoricClient,
     private readonly nav: NavClient,
     private readonly jobicy: JobicyClient,
+    private readonly canada: CanadaJobBankClient,
   ) {}
 
   descriptors(): SourceDescriptor[] {
@@ -50,6 +53,7 @@ export class MarketSourceRegistry {
       this.usaJobsHistoricSource(),
       this.navSource(),
       this.jobicySource(),
+      this.canadaJobBankSource(),
     ];
   }
 
@@ -216,9 +220,34 @@ export class MarketSourceRegistry {
        */
       licenceBasis: 'EXPLICIT_GRANT',
       licenceNote:
-        'NAV API terms (arbeidsplassen.nav.no/vilkar-api) grant consumers the right to republish received job ads "og/eller bruke dei til statistiske/analytiske formaal" - and/or use them for statistical and analytical purposes - free of charge and open to anyone. Verified live 2026-09-08. CAUTION: NAV\'s OpenAPI document declares an MIT licence which covers their SOURCE CODE, not the data; do not read it as a data grant. Obligations accepted: ads must be removed immediately once inactive (the adapter refuses non-ACTIVE entries, but there is no delisting record, which is a named residual), and the consumer is an independent GDPR controller. Coverage: Norway only, Norwegian-language titles, and the feed list carries no description - only the per-posting detail endpoint does, and it is not read - so this source contributes to volume and to no prevalence denominator. PII: the detail endpoint carries contactList with named individuals, email and phone; it is declared in the adapter\'s redaction profile against the day it is read.',
+        "NAV API terms (arbeidsplassen.nav.no/vilkar-api) grant consumers the right to republish received job ads \"og/eller bruke dei til statistiske/analytiske formaal\" - and/or use them for statistical and analytical purposes - free of charge and open to anyone. Verified live 2026-09-08. CAUTION: NAV's OpenAPI document declares an MIT licence which covers their SOURCE CODE, not the data; do not read it as a data grant. Obligations accepted: ads must be removed immediately once inactive (the adapter refuses non-ACTIVE entries, but there is no delisting record, which is a named residual), and the consumer is an independent GDPR controller. Coverage: Norway only, Norwegian-language titles, and the feed list carries no description - only the per-posting detail endpoint does, and it is not read - so this source contributes to volume and to no prevalence denominator. PII: the detail endpoint carries contactList with named individuals, email and phone; it is declared in the adapter's redaction profile against the day it is read. DISABLED: the feed is append-only from 2019 and requires cursor persistence across runs, which the ingestion model does not have - a live walk returned 20,000 records, all INACTIVE, and NAV's terms forbid retaining inactive ads.",
       licenceReviewedAt: new Date('2026-09-08T00:00:00.000Z'),
-      isEnabled: true,
+      /*
+       * DISABLED, and not for a licence reason - the licence here is one
+       * of the best available. The pipeline cannot currently use this
+       * source honestly.
+       *
+       * NAV publishes an append-only EVENT feed, ordered oldest-first from
+       * 2019, and a consumer is expected to walk it once and persist its
+       * cursor. This pipeline starts every run from a null cursor, so it
+       * always re-reads the beginning: a live 20-page walk returned 20,000
+       * records of which 20,000 were INACTIVE, and `last=true` returns
+       * exactly one item rather than a page of recent ones.
+       *
+       * Storing the inactive ones is not an option either, and that is a
+       * licence question rather than a taste one: NAV's terms require ads
+       * to be removed from a consumer's results immediately once inactive.
+       * So the adapter refuses them, correctly, and the source ingests
+       * nothing.
+       *
+       * This is the first real limit the source contract has hit. Four
+       * other pagination models fitted it unchanged; a feed that requires
+       * cursor persistence across runs does not, and that is a gap in the
+       * ingestion model rather than in this adapter. Left implemented so
+       * the shape is covered by the contract tests, and disabled so it
+       * cannot pretend to contribute.
+       */
+      isEnabled: false,
       mayRedistributeDerived: true,
     };
   }
@@ -233,6 +262,29 @@ export class MarketSourceRegistry {
       licenceBasis: 'EXPLICIT_GRANT',
       licenceNote:
         'Jobicy syndication terms grant reuse without individual permission: "You may use Jobicy listings in your own products and user experiences without requesting individual permission... You may create your own interfaces, summaries, categories, search experiences, and additional context around listings." Attribution and canonical URL retention required; polling limited to once per hour, which is an operator scheduling obligation this code does not enforce. Verified live 2026-09-08. Coverage limitation, and it is severe: the API serves a rolling window of the most recent listings with NO pagination, so a scope reads as complete because the source served everything it will serve - which is not the same as having read the market. Treat as a signal source, never a census.',
+      licenceReviewedAt: new Date('2026-09-08T00:00:00.000Z'),
+      isEnabled: true,
+      mayRedistributeDerived: true,
+    };
+  }
+
+  private canadaJobBankSource(): SourceDescriptor {
+    return {
+      slug: 'canada-job-bank',
+      displayName: 'Canada Job Bank (Employment and Social Development Canada)',
+      adapter: new CanadaJobBankAdapter(),
+      client: this.canada,
+      queryParams: { fileEncoding: 'utf-16le', separator: 'tab' },
+      /*
+       * The licence is machine-readable in the publisher's own catalogue:
+       * CKAN returns "license_id": "ca-ogl-lgo". OGL - Canada grants use
+       * "in any medium, mode or format for any lawful purpose", which
+       * covers commercial use and aggregation without further conditions
+       * beyond attribution.
+       */
+      licenceBasis: 'EXPLICIT_GRANT',
+      licenceNote:
+        'Open Government Licence - Canada, read from the open.canada.ca CKAN package metadata as "license_id": "ca-ogl-lgo", verified live 2026-09-08. Grants copying, adaptation, publication and distribution "in any medium, mode or format for any lawful purpose"; attribution required ("Contains information licensed under the Open Government Licence - Canada"). Excludes personal information and third-party rights, neither of which appears here. Coverage limitation, and it is significant: the file carries NO employer name and NO job description in any of its 65 columns, so every posting is descriptionCompleteness ABSENT with a null company - this source contributes to role volume and can never contribute to a prevalence denominator or clear the distinct-employer floor. Published monthly, so it is a monthly snapshot rather than a live feed. PII: none - all 65 columns enumerated, no contact, name, employer or free text of any kind, making it the lowest privacy risk of any source surveyed.',
       licenceReviewedAt: new Date('2026-09-08T00:00:00.000Z'),
       isEnabled: true,
       mayRedistributeDerived: true,

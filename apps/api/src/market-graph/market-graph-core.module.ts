@@ -12,6 +12,7 @@ import { GreenhouseClient } from './sources/greenhouse/greenhouse.client.js';
 import { JobTechClient } from './sources/jobtech/jobtech.client.js';
 import { MarketSourcePurgeService } from './sources/market-source-purge.service.js';
 import { MarketSourceRegistry } from './sources/source-registry.js';
+import { TeachingVacanciesClient } from './sources/teaching-vacancies/teaching-vacancies.client.js';
 
 /*
  * The Market Graph pipeline, with no HTTP surface and no authentication.
@@ -47,6 +48,7 @@ import { MarketSourceRegistry } from './sources/source-registry.js';
   providers: [
     GreenhouseClient,
     JobTechClient,
+    TeachingVacanciesClient,
     MarketSourceRegistry,
     MarketVocabularyService,
     MarketIngestionRunService,

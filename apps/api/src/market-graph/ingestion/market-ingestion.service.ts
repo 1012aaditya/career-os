@@ -191,9 +191,7 @@ export class MarketIngestionService {
     const malformed = requested.filter((scope) => !SCOPE_SHAPE.test(scope));
 
     if (malformed.length > 0) {
-      throw new ConflictException(
-        `Malformed scopes: ${malformed.join(', ')}`,
-      );
+      throw new ConflictException(`Malformed scopes: ${malformed.join(', ')}`);
     }
 
     const run = await this.runs.start({

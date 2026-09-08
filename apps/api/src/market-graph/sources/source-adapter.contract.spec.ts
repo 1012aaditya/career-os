@@ -11,6 +11,7 @@ import {
 import { FakeShapeAdapter } from './fake-shape/fake-shape.adapter.js';
 import { GreenhouseAdapter } from './greenhouse/greenhouse.adapter.js';
 import { JobTechAdapter } from './jobtech/jobtech.adapter.js';
+import { TeachingVacanciesAdapter } from './teaching-vacancies/teaching-vacancies.adapter.js';
 import type { SourceAdapter } from './source-adapter.js';
 
 /*
@@ -207,6 +208,78 @@ const ADAPTERS: Array<{
       hits: [
         { id: '7', headline: 'First' },
         { id: '7', headline: 'Second' },
+      ],
+    },
+  },
+  {
+    /*
+     * The third real source. schema.org JobPosting, a page NUMBER cursor,
+     * a date with no time, and - uniquely so far - no id field at all, so
+     * this is the first adapter to declare SOURCE_URL identity.
+     */
+    name: 'teaching-vacancies',
+    make: () => new TeachingVacanciesAdapter(),
+    page: {
+      meta: { totalPages: 1, count: 2 },
+      data: [
+        {
+          '@type': 'JobPosting',
+          title: 'Head of Computer Science',
+          description: '<p>Teaching Python and Postgres.</p>',
+          datePosted: '2026-09-08',
+          validThrough: '2026-09-29T12:00:00+01:00',
+          employmentType: ['FULL_TIME'],
+          industry: 'Education',
+          occupationalCategory: 'teacher',
+          url: 'https://example.invalid/jobs/head-of-computer-science',
+          hiringOrganization: {
+            '@type': 'Organization',
+            name: 'Example Academy',
+            identifier: '107250',
+          },
+          jobLocation: {
+            '@type': 'Place',
+            address: {
+              '@type': 'PostalAddress',
+              addressLocality: 'Bradford',
+              addressRegion: 'Yorkshire and the Humber',
+              addressCountry: 'GB',
+            },
+          },
+        },
+        {
+          '@type': 'JobPosting',
+          title: 'Teaching Assistant',
+          description: '<p>Support role.</p>',
+          datePosted: '2026-08-01',
+          validThrough: null,
+          employmentType: ['PART_TIME'],
+          occupationalCategory: 'teaching_assistant',
+          url: 'https://example.invalid/jobs/teaching-assistant',
+          hiringOrganization: { name: 'Example Primary', identifier: '107251' },
+          jobLocation: { address: { addressLocality: 'Leeds' } },
+        },
+      ],
+    },
+    pageWithNull: {
+      meta: { totalPages: 1, count: 2 },
+      data: [
+        null,
+        { title: 'Data Engineer', url: 'https://example.invalid/1' },
+      ],
+    },
+    pageMissingTitle: {
+      meta: { totalPages: 1, count: 2 },
+      data: [
+        { url: 'https://example.invalid/2' },
+        { title: 'QA Engineer', url: 'https://example.invalid/3' },
+      ],
+    },
+    pageWithDuplicate: {
+      meta: { totalPages: 1, count: 2 },
+      data: [
+        { title: 'First', url: 'https://example.invalid/7' },
+        { title: 'Second', url: 'https://example.invalid/7' },
       ],
     },
   },
@@ -481,6 +554,7 @@ describe('source rules', () => {
     const keys = [
       'greenhouse',
       'jobtech',
+      'teaching-vacancies',
       'adzuna',
       'jooble',
       'usajobs',
@@ -510,17 +584,40 @@ function stripComments(code: string): string {
   return code.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 }
 
+/*
+ * Reverses whichever array a page's envelope carries.
+ *
+ * This knew two shapes - top-level `jobs` and nested `data.items` - and
+ * silently did nothing for any other. JobTech's envelope is `hits`, so
+ * JobTech's "same ordered result from a reversed payload" test reversed
+ * NOTHING and passed trivially from the day it was added. The one test
+ * that catches an adapter leaking a source's array order into a field was
+ * vacuous for the source most likely to leak it.
+ *
+ * Now it refuses rather than shrugging: an envelope it does not recognise
+ * throws, so adding an adapter with a new shape fails loudly here instead
+ * of quietly buying a free pass.
+ */
 function reverseItems(page: Record<string, unknown>): void {
-  if (Array.isArray(page.jobs)) {
-    page.jobs.reverse();
-    return;
+  for (const key of ['jobs', 'hits', 'data', 'items'] as const) {
+    const value = page[key];
+
+    if (Array.isArray(value)) {
+      value.reverse();
+      return;
+    }
   }
 
   const data = page.data as Record<string, unknown> | undefined;
 
   if (data !== undefined && Array.isArray(data.items)) {
     data.items.reverse();
+    return;
   }
+
+  throw new Error(
+    `reverseItems does not know this envelope: ${Object.keys(page).join(', ')}`,
+  );
 }
 
 describe('the jobtech adapter, specifically', () => {

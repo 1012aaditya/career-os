@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { GreenhouseClient } from './greenhouse/greenhouse.client.js';
 import { JobTechClient } from './jobtech/jobtech.client.js';
 import { MarketSourceRegistry } from './source-registry.js';
+import { TeachingVacanciesClient } from './teaching-vacancies/teaching-vacancies.client.js';
 
 /*
  * The licence position, asserted rather than commented.
@@ -16,16 +17,20 @@ import { MarketSourceRegistry } from './source-registry.js';
  */
 
 function registry(): MarketSourceRegistry {
-  return new MarketSourceRegistry(new GreenhouseClient(), new JobTechClient());
+  return new MarketSourceRegistry(
+    new GreenhouseClient(),
+    new JobTechClient(),
+    new TeachingVacanciesClient(),
+  );
 }
 
 describe('the source registry', () => {
-  it('declares the two sources Phase 8 ingests, and no others', () => {
+  it('declares exactly the sources Phase 8 ingests, and no others', () => {
     expect(
       registry()
         .descriptors()
         .map((source) => source.slug),
-    ).toEqual(['greenhouse', 'jobtech']);
+    ).toEqual(['greenhouse', 'jobtech', 'teaching-vacancies']);
   });
 
   /*

@@ -237,7 +237,6 @@ export class MarketGraphService {
     return null;
   }
 
-
   async latestSnapshot(sourceSlug?: string) {
     const run = await this.latestSignalRun(sourceSlug);
 

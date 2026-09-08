@@ -5,6 +5,8 @@ import { GreenhouseClient } from './greenhouse/greenhouse.client.js';
 import { JobTechAdapter } from './jobtech/jobtech.adapter.js';
 import { JobTechClient } from './jobtech/jobtech.client.js';
 import type { SourceDescriptor } from './source-adapter.js';
+import { TeachingVacanciesAdapter } from './teaching-vacancies/teaching-vacancies.adapter.js';
+import { TeachingVacanciesClient } from './teaching-vacancies/teaching-vacancies.client.js';
 
 /*
  * Every source the pipeline can ingest, and everything about each of them
@@ -28,10 +30,15 @@ export class MarketSourceRegistry {
   constructor(
     private readonly greenhouse: GreenhouseClient,
     private readonly jobtech: JobTechClient,
+    private readonly teachingVacancies: TeachingVacanciesClient,
   ) {}
 
   descriptors(): SourceDescriptor[] {
-    return [this.greenhouseSource(), this.jobtechSource()];
+    return [
+      this.greenhouseSource(),
+      this.jobtechSource(),
+      this.teachingVacanciesSource(),
+    ];
   }
 
   get(slug: string): SourceDescriptor {
@@ -116,6 +123,39 @@ export class MarketSourceRegistry {
        * True, and it is the first source for which that is defensible. CC0
        * permits redistribution outright, so aggregates derived from this
        * source may be shown to users where Greenhouse's may not.
+       */
+      mayRedistributeDerived: true,
+    };
+  }
+
+  private teachingVacanciesSource(): SourceDescriptor {
+    return {
+      slug: 'teaching-vacancies',
+      displayName: 'Teaching Vacancies (UK Department for Education)',
+      adapter: new TeachingVacanciesAdapter(),
+      client: this.teachingVacancies,
+      queryParams: { pageSize: 100 },
+      /*
+       * An affirmative grant, and unusually it is machine-readable: every
+       * response envelope carries
+       *   "license": { "name": "Open Government License", "url": ... }
+       * which is the same kind of in-band evidence that made JobTech the
+       * first source with a real licence rather than an absence of terms.
+       *
+       * OGL v3 grants commercial exploitation by name. The service's own
+       * API terms restate it for job listings with one exception - no fee
+       * for contacting, interviewing or hiring a respondent to a listing -
+       * which a market statistic does not engage.
+       */
+      licenceBasis: 'EXPLICIT_GRANT',
+      licenceNote:
+        'Open Government Licence v3, declared in the API response envelope itself and restated in the service API terms, verified live 2026-09-08. OGL v3 grants the right to "exploit the Information commercially and non-commercially". One exception applies: a reuser must not charge any fee or commission for contacting, interviewing or hiring a respondent to a listing - which a market-statistics product does not do. Attribution required. Scope: UK schools only, ~3649 live vacancies, so absence of a role here is not evidence of absence in the wider UK market. PII: no structured contact fields; a live sample of 100 vacancies carried an email in 17 bodies, mostly role aliases, removed by the shared redactor before storage.',
+      licenceReviewedAt: new Date('2026-09-08T00:00:00.000Z'),
+      isEnabled: true,
+      /*
+       * True, on the same footing as JobTech: OGL v3 permits commercial
+       * exploitation and redistribution outright, so aggregates derived
+       * from this source may be shown to a reader.
        */
       mayRedistributeDerived: true,
     };

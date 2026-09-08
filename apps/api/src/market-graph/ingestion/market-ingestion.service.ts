@@ -638,6 +638,7 @@ export class MarketIngestionService {
         sourceValidThrough: toDate(record.sourceValidThrough),
         applyUrlRaw: record.applyUrlRaw,
         sourceCategoriesRaw: record.sourceCategoriesRaw,
+        occupationScheme: record.occupationScheme,
         rawPayload: record.payload as Prisma.InputJsonObject,
         rawPayloadHash: rawPayloadHash(record),
       },

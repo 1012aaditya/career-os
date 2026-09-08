@@ -95,6 +95,16 @@ async function main(): Promise<void> {
        * nothing and older ruleset rows are retained rather than rewritten
        * - which is what keeps already-published signals reproducible.
        */
+      /*
+       * The vocabulary is synced first. Normalization refuses to write a
+       * role slug it cannot resolve to a row - which is the guard working
+       * - so new canonical roles must exist before any posting can map to
+       * them.
+       */
+      const synced = await app.get(MarketVocabularyService).syncVocabulary();
+
+      console.log('[vocabulary]', JSON.stringify(synced));
+
       const normalizer = app.get(MarketNormalizationService);
       const running = { normalized: 0, mentions: 0, unresolvedRoles: 0 };
 

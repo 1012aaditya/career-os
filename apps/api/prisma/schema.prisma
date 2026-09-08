@@ -1031,6 +1031,12 @@ model MarketPostingVersion {
   /// role and mapping it would collapse every discipline into one
   /// denominator.
   sourceCategoriesRaw String[]
+  /// Which occupational classification sourceCategoriesRaw is expressed
+  /// in, as the adapter declared it: "noc", "opm-series", "ssyk-label".
+  /// A taxonomy name, never a source name - stored with the observation
+  /// because normalization must be able to read a code's scheme without
+  /// learning which source supplied it.
+  occupationScheme String?
 
   /// The source's response for this posting, preserved. NOT NULL: without
   /// it nothing is reproducible once the source deletes the posting, and a

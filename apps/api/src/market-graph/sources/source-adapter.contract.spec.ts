@@ -39,6 +39,13 @@ const CONTRACT_KEYS = [
   'locationRaw',
   'payload',
   'sourceCategoriesRaw',
+  /*
+   * Added by vocabulary v1. Which occupational classification
+   * sourceCategoriesRaw is expressed in - a taxonomy name, never a source
+   * name - so the canonical layers can read a code's scheme without
+   * learning which source supplied it.
+   */
+  'occupationScheme',
   'sourcePublishedAt',
   'sourceScope',
   'sourceUpdatedAt',

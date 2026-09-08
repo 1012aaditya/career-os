@@ -142,6 +142,7 @@ export class JobicyAdapter implements SourceAdapter {
         sourceValidThrough: null,
         applyUrlRaw: optionalString(job.url),
         sourceCategoriesRaw: labels(job),
+        occupationScheme: null,
         /*
          * No employer identifier of any kind - companyName is a display
          * string, so two spellings of one employer are two employers here.

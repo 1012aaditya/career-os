@@ -6,6 +6,7 @@ import {
   ROLE_ALIASES,
   SENIORITY_TOKENS,
   SKILL_ALIASES,
+  OCCUPATION_ROLES,
 } from './ruleset.js';
 
 /*
@@ -199,6 +200,51 @@ function joinHyphenatedWords(folded: string): string {
  * could never be reached and a genuine role silently joined the unmapped
  * backlog. A more specific match always wins over a stripped one.
  */
+
+/**
+ * The role a publisher's own occupational code asserts, if any.
+ *
+ * Tried BEFORE the title, and that ordering is the whole point of
+ * vocabulary v1. A code is assigned by the publisher rather than inferred
+ * by us, it is language-independent - which is how a Swedish or French
+ * posting resolves without a Swedish or French alias list - and one code
+ * covers thousands of postings where an alias covers one spelling.
+ *
+ * Every element of the category array is tried, because the array is
+ * ordered by the adapter for hash stability and the code's position is not
+ * fixed. If two elements assert DIFFERENT roles the posting is left
+ * UNRESOLVED rather than resolved to whichever was found first: a
+ * disagreement between two of the publisher's own codes is exactly the
+ * case where guessing would be worst.
+ */
+export function roleFromOccupationCode(
+  scheme: string | null,
+  categories: readonly string[],
+): string | null {
+  if (scheme === null) {
+    return null;
+  }
+
+  const table = OCCUPATION_ROLES[scheme];
+
+  if (table === undefined) {
+    return null;
+  }
+
+  const matched = new Set<string>();
+
+  for (const category of categories) {
+    const slug = table[category];
+
+    if (slug !== undefined) {
+      matched.add(slug);
+    }
+  }
+
+  /* Exactly one, or nothing. Ambiguity is not resolved by preference. */
+  return matched.size === 1 ? ([...matched][0] ?? null) : null;
+}
+
 export function normalizeTitle(titleRaw: string): {
   titleNormalized: string;
   titleModifierRaw: string | null;
@@ -534,6 +580,18 @@ export function normalizeCompany(companyRaw: string | null): string | null {
 export function normalizePosting(record: RawPostingRecord): NormalizedPosting {
   const title = normalizeTitle(record.titleRaw);
 
+  /*
+   * The publisher's own classification wins over our reading of the title.
+   * It is the stronger evidence: the employer chose it, we only guessed at
+   * the title. The title match is kept as the fallback and its result is
+   * still what titleNormalized reports, so nothing about the backlog
+   * measurement changes.
+   */
+  const codeRole = roleFromOccupationCode(
+    record.occupationScheme,
+    record.sourceCategoriesRaw,
+  );
+
   const descriptionText =
     record.descriptionRaw === null
       ? null
@@ -577,8 +635,9 @@ export function normalizePosting(record: RawPostingRecord): NormalizedPosting {
   const body = {
     rulesetVersion: RULESET_VERSION,
     titleNormalized: title.titleNormalized,
-    roleSlug: title.roleSlug,
-    roleMatchMethod: title.roleMatchMethod,
+    roleSlug: codeRole ?? title.roleSlug,
+    roleMatchMethod:
+      codeRole === null ? title.roleMatchMethod : 'SOURCE_TAXONOMY',
     roleAliasKey: title.roleAliasKey,
     titleModifierRaw: title.titleModifierRaw,
     companyNormalized,

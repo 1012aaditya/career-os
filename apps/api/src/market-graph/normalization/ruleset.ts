@@ -17,9 +17,20 @@
  * and "C#" to "c" - which would give two distinct skills one identity.
  */
 
-export const RULESET_VERSION = 3;
+export const RULESET_VERSION = 4;
 
 /*
+ * v4 added occupational-code matching, and the reason is a measurement.
+ * v3's Unicode fix moved role resolution by exactly zero, because
+ * resolution matched titles against 159 hand-authored aliases of which
+ * none contained a non-ASCII character. The bottleneck was never the
+ * tokenizer; it was that we were reading the title and ignoring the
+ * classification the publisher had already attached to the posting.
+ *
+ * v4 reads the code first. It is language-independent, asserted by the
+ * publisher rather than inferred by us, and one code covers thousands of
+ * postings where an alias covers one spelling.
+ *
  * v3 made the tokenizer Unicode-aware. TOKEN_CHARS was ASCII-only, so
  * every non-Latin-alphabet character was a word boundary and every
  * accented or non-English title fragmented: "Mjukvaruingenjor" (with an
@@ -58,7 +69,68 @@ export type CanonicalTerm = { slug: string; label: string };
  * asserts; the unresolved titles accumulate as a measurable backlog
  * instead, which is the evidence a real taxonomy would need.
  */
-export const ROLES: readonly CanonicalTerm[] = [
+/**
+ * Canonical roles introduced by VOCABULARY_VERSION 1.
+ *
+ * Authored from the occupational labels the publishers themselves use, so
+ * every one is checkable against a public classification. They exist
+ * because the corpus is a general labour market and the vocabulary was
+ * not: cooks, drivers, carers and retail staff are 96% of what is
+ * actually stored, and no amount of tech vocabulary reaches them.
+ */
+export const VOCABULARY_V1_ROLES: ReadonlyArray<readonly [string, string]> = [
+  ['cook', 'Cook'],
+  ['chef', 'Chef'],
+  ['food-service-worker', 'Food Service Worker'],
+  ['food-and-beverage-server', 'Food and Beverage Server'],
+  ['food-service-supervisor', 'Food Service Supervisor'],
+  ['restaurant-manager', 'Restaurant Manager'],
+  ['retail-salesperson', 'Retail Salesperson'],
+  ['retail-sales-supervisor', 'Retail Sales Supervisor'],
+  ['retail-manager', 'Retail Manager'],
+  ['cashier', 'Cashier'],
+  ['truck-driver', 'Truck Driver'],
+  ['delivery-driver', 'Delivery Driver'],
+  ['child-care-provider', 'Child Care Provider'],
+  ['early-childhood-educator', 'Early Childhood Educator'],
+  ['home-support-worker', 'Home Support Worker'],
+  ['nurse-aide', 'Nurse Aide'],
+  ['licensed-practical-nurse', 'Licensed Practical Nurse'],
+  ['farm-worker', 'Farm Worker'],
+  ['cleaner', 'Cleaner'],
+  ['receptionist', 'Receptionist'],
+  ['administrative-assistant', 'Administrative Assistant'],
+  ['administrative-officer', 'Administrative Officer'],
+  ['construction-labourer', 'Construction Labourer'],
+  ['automotive-technician', 'Automotive Technician'],
+  ['carpenter', 'Carpenter'],
+  ['welder', 'Welder'],
+  ['electrician', 'Electrician'],
+  ['material-handler', 'Material Handler'],
+  ['storekeeper', 'Storekeeper'],
+  ['customer-service-representative', 'Customer Service Representative'],
+  ['security-guard', 'Security Guard'],
+  ['hairstylist', 'Hairstylist'],
+  ['bookkeeper', 'Bookkeeper'],
+  ['accounting-clerk', 'Accounting Clerk'],
+  ['accountant', 'Accountant'],
+  ['social-services-worker', 'Social Services Worker'],
+  ['teacher', 'Teacher'],
+  ['teaching-assistant', 'Teaching Assistant'],
+  ['head-teacher', 'Head Teacher'],
+  ['marketing-specialist', 'Marketing Specialist'],
+  ['systems-analyst', 'Systems Analyst'],
+  ['it-specialist', 'IT Specialist'],
+  ['it-support', 'IT Support'],
+  ['systems-administrator', 'Systems Administrator'],
+  ['computer-scientist', 'Computer Scientist'],
+  ['management-analyst', 'Management Analyst'],
+  ['financial-specialist', 'Financial Specialist'],
+  ['human-resources-specialist', 'Human Resources Specialist'],
+  ['electrical-engineer', 'Electrical Engineer'],
+];
+
+export const TECH_ROLES: readonly CanonicalTerm[] = [
   { slug: 'backend-engineer', label: 'Backend Engineer' },
   { slug: 'frontend-engineer', label: 'Frontend Engineer' },
   { slug: 'fullstack-engineer', label: 'Full Stack Engineer' },
@@ -85,6 +157,20 @@ export const ROLES: readonly CanonicalTerm[] = [
    */
   { slug: 'technical-program-manager', label: 'Technical Program Manager' },
   { slug: 'research-engineer', label: 'Research Engineer' },
+];
+
+/**
+ * Every canonical role: the original tech vocabulary plus the occupational
+ * families VOCABULARY_VERSION 1 added.
+ *
+ * They are concatenated rather than merged into one literal so the two
+ * origins stay visible - the tech roles were authored from observed
+ * postings, the rest from published occupational classifications - and so
+ * a reviewer can see at a glance which set a slug came from.
+ */
+export const ROLES: readonly CanonicalTerm[] = [
+  ...TECH_ROLES,
+  ...VOCABULARY_V1_ROLES.map(([slug, label]) => ({ slug, label })),
 ];
 
 /*
@@ -474,3 +560,135 @@ export const ROLE_BY_SLUG: ReadonlyMap<string, CanonicalTerm> = new Map(
 export const SKILL_BY_SLUG: ReadonlyMap<string, CanonicalTerm> = new Map(
   SKILLS.map((skill) => [skill.slug, skill]),
 );
+
+/**
+ * The version of the CANONICAL VOCABULARY, separate from RULESET_VERSION.
+ *
+ * The ruleset is how text is read; the vocabulary is what it may resolve
+ * to. They change for different reasons and at different rates - adding a
+ * role does not alter how a title is tokenized - so conflating them would
+ * force a full re-normalization for every vocabulary edit. Both are
+ * stamped on the normalization row, so a resolved role is always
+ * attributable to the exact rules and the exact vocabulary that produced
+ * it.
+ */
+export const VOCABULARY_VERSION = 1;
+
+/**
+ * Occupational classifications, keyed by SCHEME then by code.
+ *
+ * The evidence layer for the whole phase. Every value here is the
+ * publisher's own code paired with a canonical role we authored, and the
+ * official label is kept in the comment so a reviewer can check the
+ * mapping without a lookup.
+ *
+ * Three rules govern what may go in:
+ *
+ *   1. Only where the publisher's own label makes the mapping obvious. A
+ *      code whose label spans several distinct occupations is left out
+ *      rather than flattened.
+ *   2. Never a merge across a real boundary. "Restaurant and food service
+ *      managers" is not "Food service supervisors"; "Chefs" is not
+ *      "Cooks"; an analyst is not a scientist. Each keeps its own role.
+ *   3. External codes are EVIDENCE, not identity. The canonical role slug
+ *      is ours; the NOC or OPM code is a reference recorded beside it.
+ */
+export const OCCUPATION_ROLES: Readonly<
+  Record<string, Readonly<Record<string, string>>>
+> = {
+  /* NOC 2021 five-digit unit groups, with NOC 2016 four-digit forms where
+   * the corpus still carries them. Codes are strings: leading zeros are
+   * significant. */
+  noc: {
+    '63200': 'cook',
+    '62200': 'chef',
+    '65201': 'food-service-worker',
+    '6513': 'food-and-beverage-server',
+    '62020': 'food-service-supervisor',
+    '0631': 'restaurant-manager',
+    '60030': 'restaurant-manager',
+    '64100': 'retail-salesperson',
+    '62010': 'retail-sales-supervisor',
+    '0621': 'retail-manager',
+    '65100': 'cashier',
+    '73300': 'truck-driver',
+    '7514': 'delivery-driver',
+    '44100': 'child-care-provider',
+    '4214': 'early-childhood-educator',
+    '44101': 'home-support-worker',
+    '33102': 'nurse-aide',
+    '32101': 'licensed-practical-nurse',
+    '8431': 'farm-worker',
+    '65310': 'cleaner',
+    '14101': 'receptionist',
+    '1241': 'administrative-assistant',
+    '1221': 'administrative-officer',
+    '75110': 'construction-labourer',
+    '72410': 'automotive-technician',
+    '72310': 'carpenter',
+    '72106': 'welder',
+    '72200': 'electrician',
+    '7452': 'material-handler',
+    '14401': 'storekeeper',
+    '64409': 'customer-service-representative',
+    '64410': 'security-guard',
+    '63210': 'hairstylist',
+    '12200': 'bookkeeper',
+    '14200': 'accounting-clerk',
+    '11100': 'accountant',
+    '4212': 'social-services-worker',
+    '43100': 'teaching-assistant',
+    '11202': 'marketing-specialist',
+    /* Information systems analysts and consultants. A distinct
+     * occupation from software-engineer in NOC's own structure, and kept
+     * distinct here rather than folded into it. */
+    '21222': 'systems-analyst',
+  },
+
+  /*
+   * US OPM occupational series. 2210 is "Information Technology
+   * Management" and covers 9,959 unresolved federal postings whose titles
+   * are literally "IT Specialist".
+   *
+   * Deliberately NOT mapped to software-engineer. The series spans
+   * administration, security, network and applications work, and folding
+   * it into a software-engineering role would be exactly the false merge
+   * this vocabulary is built to avoid. It gets a role that says what the
+   * series says.
+   */
+  'opm-series': {
+    '2210': 'it-specialist',
+    '1550': 'computer-scientist',
+    '0343': 'management-analyst',
+    '0501': 'financial-specialist',
+    '0201': 'human-resources-specialist',
+  },
+
+  /* The DfE publishes a small closed enum rather than codes. */
+  'dfe-occupational-category': {
+    teacher: 'teacher',
+    teaching_assistant: 'teaching-assistant',
+    higher_level_teaching_assistant: 'teaching-assistant',
+    headteacher: 'head-teacher',
+    deputy_headteacher: 'head-teacher',
+    it_support: 'it-support',
+    administration_hr_data_and_finance: 'administrative-assistant',
+  },
+
+  /*
+   * JobTech publishes Swedish occupation LABELS, not codes. They are
+   * treated as codes because that is what they are here: a controlled
+   * vocabulary the publisher assigns, not free text a candidate wrote.
+   * This is how Swedish postings resolve without a Swedish alias list.
+   */
+  'ssyk-label': {
+    'Systemutvecklare/Programmerare': 'software-engineer',
+    'Mjukvaru- och systemutvecklare m.fl.': 'software-engineer',
+    'Nätverks- och systemtekniker m.fl.': 'systems-administrator',
+    'Supporttekniker, IT': 'it-support',
+    'Systemanalytiker och IT-arkitekter m.fl.': 'systems-analyst',
+    'Drifttekniker, IT': 'systems-administrator',
+    'Testledare och testare': 'qa-engineer',
+    'Civilingenjörsyrken inom elektroteknik': 'electrical-engineer',
+  },
+};

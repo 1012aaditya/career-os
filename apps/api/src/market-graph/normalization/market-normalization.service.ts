@@ -98,6 +98,7 @@ export class MarketNormalizationService {
         sourceValidThrough: true,
         applyUrlRaw: true,
         sourceCategoriesRaw: true,
+        occupationScheme: true,
         posting: { select: { externalKey: true, sourceScope: true } },
       },
     });
@@ -119,6 +120,7 @@ export class MarketNormalizationService {
         sourceValidThrough: version.sourceValidThrough?.toISOString() ?? null,
         applyUrlRaw: version.applyUrlRaw,
         sourceCategoriesRaw: version.sourceCategoriesRaw,
+        occupationScheme: version.occupationScheme,
         externalGroupKey: null,
         payload: {},
       };

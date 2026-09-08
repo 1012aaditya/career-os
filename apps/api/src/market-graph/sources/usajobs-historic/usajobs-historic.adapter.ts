@@ -207,6 +207,7 @@ export class UsaJobsHistoricAdapter implements SourceAdapter {
          */
         applyUrlRaw: null,
         sourceCategoriesRaw: seriesLabels(job),
+        occupationScheme: 'opm-series',
         /*
          * The announcement number, which groups the several postings a
          * single announcement can produce. Stated by the source, so it is

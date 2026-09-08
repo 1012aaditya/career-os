@@ -311,6 +311,7 @@ export class JobTechAdapter implements SourceAdapter {
           optionalString(asRecord(job.application_details)?.url) ??
           optionalString(job.webpage_url),
         sourceCategoriesRaw: taxonomyLabels(job),
+        occupationScheme: 'ssyk-label',
         /*
          * The employer's organisation number - a real legal-entity
          * identifier, which is strictly stronger than the first source's

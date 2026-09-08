@@ -74,6 +74,21 @@ export type RawPostingRecord = {
    */
   sourceCategoriesRaw: string[];
   /**
+   * Which occupational classification `sourceCategoriesRaw` is expressed
+   * in, or null when the source publishes none.
+   *
+   * A TAXONOMY name ("noc", "opm-series"), never a source name - the
+   * canonical layers may learn that a code is a NOC code, and must never
+   * learn which of our sources supplied it.
+   *
+   * This exists because every source already classifies its own postings
+   * and title-matching throws that away. A code is language-independent,
+   * asserted by the publisher rather than inferred by us, and the same
+   * code covers thousands of postings - which is why it resolves what an
+   * English alias list cannot.
+   */
+  occupationScheme: string | null;
+  /**
    * The grouping the source itself asserts, where it asserts one - a
    * requisition id behind several city-specific posts. Null when the
    * source offers nothing.

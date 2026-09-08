@@ -176,6 +176,7 @@ export class CanadaJobBankAdapter implements SourceAdapter {
         sourceValidThrough: null,
         applyUrlRaw: null,
         sourceCategoriesRaw: occupationLabels(row),
+        occupationScheme: 'noc',
         externalGroupKey: null,
         payload: { ...row },
       });

@@ -160,6 +160,7 @@ export class FakeShapeAdapter implements SourceAdapter {
         sourceValidThrough: fromEpochSeconds(item.closes_ts),
         applyUrlRaw: optionalString(item.link),
         sourceCategoriesRaw: splitTags(item.tags),
+        occupationScheme: null,
         externalGroupKey: null,
         payload: item,
       });

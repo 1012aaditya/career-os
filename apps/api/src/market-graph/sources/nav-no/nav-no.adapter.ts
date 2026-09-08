@@ -162,6 +162,7 @@ export class NavAdapter implements SourceAdapter {
         sourceValidThrough: null,
         applyUrlRaw: null,
         sourceCategoriesRaw: [],
+        occupationScheme: null,
         externalGroupKey: null,
         payload: item,
       });

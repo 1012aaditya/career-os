@@ -187,6 +187,7 @@ export class TeachingVacanciesAdapter implements SourceAdapter {
         sourceValidThrough: optionalInstant(job.validThrough),
         applyUrlRaw: externalKey,
         sourceCategoriesRaw: categoryLabels(job),
+        occupationScheme: 'dfe-occupational-category',
         /*
          * The school's DfE Unique Reference Number - a real government
          * registration identifier, and the strongest employer identity of

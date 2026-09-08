@@ -207,6 +207,7 @@ export class GreenhouseAdapter implements SourceAdapter {
         sourceValidThrough: optionalInstant(job.application_deadline),
         applyUrlRaw: optionalString(job.absolute_url),
         sourceCategoriesRaw: departmentLabels(job.departments),
+        occupationScheme: null,
         /*
          * The requisition behind the post. Greenhouse returns both, and
          * one requisition advertised in three cities is three posts

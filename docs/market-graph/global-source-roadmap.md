@@ -433,3 +433,132 @@ currently accept aggregate data. So India is not "one adapter away". It is
 either a DGE partnership, a paid vendor licence, or a contract extension —
 and it must be labelled honestly in the product as statistics-only until
 one of those lands.
+
+---
+
+## Geographic Coverage Gaps
+
+Coverage measured by what is **live and enabled today**, not by what is
+licensed or planned. A source that is disabled contributes nothing.
+
+| Region | Coverage | Live sources | Honest assessment |
+|---|---|---|---|
+| **Nordics** | MODERATE | JobTech (SE) | 6,671 postings, full descriptions. NAV (NO) licensed but disabled |
+| **USA** | MODERATE | USAJOBS Historic | 10,000 postings, but **federal only and historic only** — a record of past demand, no descriptions |
+| **Canada** | MODERATE | Canada Job Bank | 53,799 postings — the largest single source — but **no employer and no description** |
+| **UK** | WEAK | Teaching Vacancies | 3,338 postings, **schools only**. Not a UK labour market view |
+| **Global remote** | WEAK | Jobicy | 200 postings on a rolling window. A signal, not a census |
+| **EU (non-Nordic)** | **NONE** | — | France Travail licensed and unbuilt; Germany, NL, DK, AT all blocked or aggregate-only |
+| **India** | **NONE** | — | No legitimate postings source exists |
+| **APAC** | **NONE** | — | Research in flight |
+| **LATAM** | **NONE** | — | Research in flight |
+| **Middle East** | **NONE** | — | Research in flight |
+| **Africa** | **NONE** | — | Research in flight |
+
+**The uncomfortable summary: five regions have zero coverage, and no region
+has strong coverage.** The two largest sources by volume (Canada, USAJOBS)
+are the two that carry no job descriptions, so they contribute to role
+volume and to no skill-prevalence denominator at all.
+
+The single largest addressable gap is **France Travail** — licensed, a real
+national labour market, full descriptions, ROME occupational codes, and
+blocked only on obtaining OAuth2 credentials. It is the highest-value
+unbuilt item on this roadmap.
+
+---
+
+## Market Category Gaps
+
+| Category | Coverage | Where it comes from |
+|---|---|---|
+| Government / public administration | MODERATE | USAJOBS (US federal), NCS unavailable |
+| Education | MODERATE | Teaching Vacancies — but UK schools only |
+| Software / engineering | **WEAK** | Jobicy only (200 postings). Greenhouse was the best source for this and is disabled |
+| Data / AI | **WEAK** | Same |
+| Healthcare | **NONE** | No live source |
+| Finance | **NONE** | No live source |
+| Product, Design, Marketing, Sales, Operations, Legal | **NONE** | No live source |
+| Skilled trades | **WEAK** | Canada Job Bank has NOC codes but no descriptions |
+| Entry-level / internships | **NONE** | Freshersworld and equivalents all blocked |
+| Remote | WEAK | Jobicy |
+
+**The most consequential gap is software/engineering**, because it is both
+the product's likely primary audience and the category where the pipeline's
+skills vocabulary is strongest. The single best source for it — Greenhouse,
+at 39.49% role resolution, by far the highest of any source — is disabled
+on licensing. That is worth stating plainly: **the vocabulary works best on
+exactly the data the product is not allowed to use.**
+
+---
+
+## Recommended Priority
+
+### TIER 0 — implemented
+JobTech, Canada Job Bank, USAJOBS Historic, Teaching Vacancies, Jobicy.
+Greenhouse and NAV implemented but disabled.
+
+### TIER 1 — build next, no new permission needed
+1. **NAV cursor persistence** — an *engineering* item, not a licensing one.
+   NAV's licence explicitly names statistical use; it is disabled purely
+   because the ingestion model cannot persist a feed cursor across runs.
+   Fixing that unblocks a fully licensed national source and every future
+   feed-shaped source.
+2. **`TOKEN_CHARS` Unicode support** — a `RULESET_VERSION` bump. Currently
+   four of six live sources resolve almost no roles. This raises the value
+   of every non-English source already ingested, and costs less now than
+   after more of them land.
+
+### TIER 2 — build after credentials
+3. **France Travail** — the largest addressable geographic gap. Needs a
+   free self-serve OAuth2 registration. Obligations are real and shape the
+   design: no re-exposure of raw postings, mandatory 24-hour refresh,
+   anonymisation on delist, and publication of the normalization method.
+4. **data.gov.in aggregates** — needs a key plus resolution of whether a
+   commercial entity may register, **and** the aggregate-ingestion contract
+   extension below. Not a quick win.
+
+### TIER 3 — partnership targets, in order of expected value
+5. **Ashby / Workable consent-gated partner feeds** — the only ATS route
+   that solves the ownership problem, because the employer consents.
+6. **DGE / Ministry of Labour & Employment (NCS)** — the only route to
+   Indian postings. Ask narrowly for the government-vacancy subset. Note it
+   is a request to change a departmental classification.
+7. **Info Edge (India) Ltd** — one conversation, potentially seven
+   properties. Tempered by the fact that they publish JobSpeak and would be
+   licensing a competitor.
+8. **Lightcast** — excellent data, but the AI clause is disqualifying for
+   this product unless specifically waived.
+
+### TIER 4 — research
+Finland, TimesJobs, Instahyre, RemoteOK, Reed, Findwork, and the
+aggregate-only European sources.
+
+### TIER 5 — do not use
+Adzuna, Jooble, The Muse, Arbeitnow, Himalayas, WeWorkRemotely, Careerjet,
+Bundesagentur, Foundit, Wellfound, IndianAPI, Jobvetta, API Setu,
+SmartRecruiters, Personio, Recruitee, Lever, Greenhouse, and every source
+classified SCRAPING_ONLY. **None of these may be implemented**, and the
+reasons are recorded per source above so the question is not reopened.
+
+---
+
+## Phase 8 Future Expansion
+
+Ordered by value per unit of effort, which is not the same as ordered by
+source size:
+
+1. **Fix NAV** (engineering, days) — unlocks a licensed national source.
+2. **Unicode tokenizer** (engineering, days) — raises the yield of every
+   non-English source already ingested.
+3. **France Travail** (credentials + adapter, ~a week) — closes the largest
+   geographic gap with a real labour market.
+4. **Aggregate ingestion contract extension** (a phase) — unlocks India,
+   the Netherlands, Denmark and Austria simultaneously. This is the highest
+   *ceiling* item and the highest *cost* item, and it must not be attempted
+   by pretending counts are postings.
+5. **Partnership outreach** (business development, months) — Ashby/Workable
+   first, DGE second.
+
+**What should not be done:** adding more aggregators. Eleven were assessed
+and one was usable. The category has been tested sufficiently to stop
+spending engineering time on it.

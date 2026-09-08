@@ -2,12 +2,14 @@ import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import {
+  fetchMarketStatistics,
   fetchRoleSkills,
   fetchRoleVolumes,
   sampleCaveat,
   sharePercent,
   type MarketRoleSkill,
   type MarketRoleVolume,
+  type MarketStatisticsDataset,
   type MarketWindow,
 } from '../../market/market-api';
 import {
@@ -47,6 +49,7 @@ export function MarketScreen() {
   const [selected, setSelected] = useState<Selection>(null);
   const [skills, setSkills] = useState<MarketRoleSkill[]>([]);
   const [skillsLoading, setSkillsLoading] = useState(false);
+  const [statistics, setStatistics] = useState<MarketStatisticsDataset[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -57,6 +60,17 @@ export function MarketScreen() {
 
       setWindow(result.window);
       setVolumes(result.signals);
+
+      /*
+       * Statistics are fetched alongside but failing to get them must not
+       * blank the screen: they are published context, not the market view
+       * itself.
+       */
+      try {
+        setStatistics(await fetchMarketStatistics());
+      } catch {
+        setStatistics([]);
+      }
     } catch {
       /*
        * The caught error is not rendered. A network error's message can
@@ -247,12 +261,80 @@ export function MarketScreen() {
             )}
           </View>
         )}
+
+        {statistics.length > 0 && (
+          <View style={styles.section}>
+            <AppText variant="heading">Published statistics</AppText>
+            {/*
+              * Separated from the signals above on purpose. Those are
+              * counts we computed from postings we observed; these are
+              * figures a statistical agency published about a population.
+              * Putting them in one list would invite adding them together,
+              * and they do not add.
+              */}
+            <AppText variant="caption" muted style={styles.subtitle}>
+              Published by statistical agencies, not computed from postings.
+            </AppText>
+
+            {statistics.map((dataset) => {
+              const latest = dataset.observations[0];
+
+              return (
+                <Card key={`${dataset.source.slug}-${dataset.datasetKey}`}>
+                  <AppText variant="caption">
+                    {dataset.source.displayName}
+                  </AppText>
+                  {latest !== undefined && (
+                    <AppText>
+                      {`${latest.value} ${latest.unit} · ${latest.geography} · ${new Date(
+                        latest.periodStart,
+                      ).toLocaleDateString()}`}
+                    </AppText>
+                  )}
+                  {/*
+                    * Both instants, because they answer different
+                    * questions. releasedAt is when the agency published;
+                    * retrievedAt is when we fetched. Importing today does
+                    * not make an older release current, and showing only
+                    * one of them would let a reader believe it did.
+                    */}
+                  <AppText variant="caption" muted style={styles.caveat}>
+                    {`${dataset.datasetKey} v${dataset.version}${
+                      dataset.releasedAt === null
+                        ? ''
+                        : ` · released ${new Date(
+                            dataset.releasedAt,
+                          ).toLocaleDateString()}`
+                    } · retrieved ${new Date(
+                      dataset.retrievedAt,
+                    ).toLocaleDateString()}`}
+                  </AppText>
+                  {/*
+                    * The licence credit, rendered where the data is.
+                    * O*NET's CC BY terms, the Open Government Licence -
+                    * Canada and Indeed Hiring Lab all require it, and a
+                    * credit kept only in a repository is one no reader
+                    * ever sees.
+                    */}
+                  <AppText variant="caption" muted style={styles.attribution}>
+                    {dataset.attribution}
+                  </AppText>
+                </Card>
+              );
+            })}
+          </View>
+        )}
       </ScrollView>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
+  attribution: {
+    marginTop: spacing.sm,
+    fontSize: 11,
+    lineHeight: 15,
+  },
   content: {
     padding: spacing.md,
     gap: spacing.lg,

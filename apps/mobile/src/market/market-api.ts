@@ -27,6 +27,36 @@ export type MarketSource = {
   mayRedistributeDerived: boolean;
 };
 
+/**
+ * A published dataset and the credit its licence obliges us to show.
+ *
+ * `attribution` is not decoration. O*NET's CC BY licence, the Open
+ * Government Licence - Canada and Indeed Hiring Lab's terms all require
+ * the credit to be displayed where the data is, and a credit that lives
+ * only in a repository is one no reader ever sees.
+ */
+export type MarketStatisticsDataset = {
+  source: { slug: string; displayName: string };
+  datasetKey: string;
+  version: string;
+  releasedAt: string | null;
+  retrievedAt: string;
+  rowCount: number;
+  attribution: string;
+  observations: Array<{
+    seriesKey: string;
+    geography: string;
+    category: string | null;
+    periodStart: string;
+    periodEnd: string;
+    periodType: string;
+    metric: string;
+    /** A string, as published. Never re-parsed into a float on device. */
+    value: string;
+    unit: string;
+  }>;
+};
+
 export type MarketWindow = {
   start: string;
   end: string;
@@ -127,4 +157,23 @@ export function sampleCaveat(signal: {
   }
 
   return null;
+}
+
+/**
+ * Published market statistics.
+ *
+ * Deliberately a separate call from the signal endpoints. A signal is
+ * computed from postings we observed; these are figures a statistical
+ * agency published. Showing them in one list would invite a reader to add
+ * them together, and they do not add - one counts postings, the other
+ * counts openings.
+ */
+export async function fetchMarketStatistics(): Promise<
+  MarketStatisticsDataset[]
+> {
+  const response = await apiRequest<{ data: MarketStatisticsDataset[] }>(
+    '/market/statistics?limit=3',
+  );
+
+  return response.data;
 }

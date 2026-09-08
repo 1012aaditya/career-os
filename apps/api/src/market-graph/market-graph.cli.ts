@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { MarketIngestionService } from './ingestion/market-ingestion.service.js';
 import { MarketVocabularyService } from './ingestion/market-vocabulary.service.js';
 import { MarketGraphCoreModule } from './market-graph-core.module.js';
+import { MarketLegacySanitizerService } from './observations/market-legacy-sanitizer.service.js';
 import { MarketNormalizationService } from './normalization/market-normalization.service.js';
 import { MarketSignalService } from './signals/market-signal.service.js';
 import { MarketDatasetRegistry } from './datasets/dataset-registry.js';
@@ -74,6 +75,42 @@ async function main(): Promise<void> {
           }),
         );
       }
+
+      return;
+    }
+
+    if (command === 'sanitize-legacy') {
+      const result = await app.get(MarketLegacySanitizerService).sanitize();
+
+      console.log('[sanitize-legacy]', JSON.stringify(result));
+
+      return;
+    }
+
+    if (command === 'normalize') {
+      /*
+       * Re-normalizes every stored version that has no normalization at
+       * the CURRENT ruleset. Idempotent by construction: the selector is
+       * "versions with none at this ruleset", so a second run finds
+       * nothing and older ruleset rows are retained rather than rewritten
+       * - which is what keeps already-published signals reproducible.
+       */
+      const normalizer = app.get(MarketNormalizationService);
+      const running = { normalized: 0, mentions: 0, unresolvedRoles: 0 };
+
+      for (;;) {
+        const batch = await normalizer.normalizePending({ now: new Date() });
+
+        running.normalized += batch.normalized;
+        running.mentions += batch.mentions;
+        running.unresolvedRoles += batch.unresolvedRoles;
+
+        if (batch.normalized === 0) {
+          break;
+        }
+      }
+
+      console.log('[normalize]', JSON.stringify(running));
 
       return;
     }

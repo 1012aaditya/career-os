@@ -13,6 +13,7 @@ import { MarketIngestionRunService } from './ingestion/market-ingestion-run.serv
 import { MarketIngestionService } from './ingestion/market-ingestion.service.js';
 import { MarketVocabularyService } from './ingestion/market-vocabulary.service.js';
 import { MarketGraphService } from './market-graph.service.js';
+import { MarketLegacySanitizerService } from './observations/market-legacy-sanitizer.service.js';
 import { MarketNormalizationService } from './normalization/market-normalization.service.js';
 import { MarketSignalService } from './signals/market-signal.service.js';
 import { GreenhouseClient } from './sources/greenhouse/greenhouse.client.js';
@@ -72,6 +73,7 @@ import { UsaJobsHistoricClient } from './sources/usajobs-historic/usajobs-histor
     StatCanJvwsDataset,
     MarketDatasetRegistry,
     MarketDatasetService,
+    MarketLegacySanitizerService,
     MarketVocabularyService,
     MarketIngestionRunService,
     MarketIngestionService,
@@ -81,6 +83,7 @@ import { UsaJobsHistoricClient } from './sources/usajobs-historic/usajobs-histor
     MarketSourcePurgeService,
   ],
   exports: [
+    MarketLegacySanitizerService,
     MarketDatasetRegistry,
     MarketDatasetService,
     MarketSourcePurgeService,

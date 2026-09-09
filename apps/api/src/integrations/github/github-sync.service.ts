@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { StructuredLogger } from '../../observability/structured-logger.js';
 import { connectionTokenAad } from '../crypto/aad.js';
 import { fromStorageBytes } from '../crypto/bytes.js';
 import { EncryptionService } from '../crypto/encryption.service.js';
@@ -360,9 +361,6 @@ export class GithubSyncService {
    * never handed to the logger, for the reason given on
    * GithubSyncFailedError.
    */
-  private readonly logger = new Logger(
-    GithubSyncService.name,
-  );
 
   constructor(
     private readonly prisma: PrismaService,
@@ -370,6 +368,16 @@ export class GithubSyncService {
     private readonly ingestion: GithubIngestionService,
     private readonly runs: ExternalSyncRunService,
     private readonly evidence: GithubEvidenceRepository,
+    /*
+     * Optional with a default, matching the pattern the source clients
+     * already use for their injected sleep and credentials. The container
+     * supplies the shared singleton; the default exists so the Phase 7
+     * specs, which construct these services directly with a fixed
+     * argument list, keep working without being rewritten for a
+     * diagnostics change.
+     */
+    @Optional()
+    private readonly structured: StructuredLogger = new StructuredLogger(),
   ) {}
 
   /**
@@ -485,9 +493,20 @@ export class GithubSyncService {
        */
       await this.runs.fail(run.id, reasonCode);
 
-      this.logger.warn(
-        `GitHub sync failed for user ${userId} run ${run.id}: ${reasonCode}`,
-      );
+      /*
+       * The user id used to be interpolated into this line in plain text.
+       * It is the key that indexes somebody's career history, and a log
+       * aggregator is not where it belongs - so it is replaced by a stable
+       * pseudonym, which still answers "is this the same person failing
+       * repeatedly" without carrying the id itself. PR-5.
+       */
+      this.structured.event('warn', 'github.sync.failed', {
+        actor: this.structured.actor(userId),
+        provider: 'github',
+        operation: 'sync',
+        errorCode: reasonCode,
+        errorCategory: 'dependency',
+      });
 
       /*
        * A new error carrying only the code. The caught error is dropped
@@ -522,10 +541,7 @@ export class GithubSyncService {
      * scan budget, and those repositories are genuinely unobserved. The
      * status is returned alongside so a client can say which.
      */
-    await this.stampLastSyncedAt(
-      userId,
-      run.id,
-    );
+    await this.stampLastSyncedAt(userId);
 
     const reposRevalidated =
       observation.repositories.filter(
@@ -625,10 +641,13 @@ export class GithubSyncService {
    * the work was already done. The data payload names one field, so this
    * write is structurally incapable of touching a token column.
    */
-  private async stampLastSyncedAt(
-    userId: string,
-    runId: string,
-  ): Promise<void> {
+  /*
+   * The run id used to be a parameter because the failure path
+   * interpolated it into a log message. PR-5 replaced that message with a
+   * structured event carrying an event code, so the argument had no
+   * remaining reader and is gone rather than left as dead weight.
+   */
+  private async stampLastSyncedAt(userId: string): Promise<void> {
     try {
       await this.prisma.externalConnection.updateMany(
         {
@@ -640,9 +659,18 @@ export class GithubSyncService {
         },
       );
     } catch {
-      this.logger.warn(
-        `Could not stamp lastSyncedAt for run ${runId}`,
-      );
+      /*
+       * The run id is dropped rather than logged. It is not personal data,
+       * but it is not in the log allowlist either, and the event code plus
+       * the request id already identify this failure - adding a field to
+       * the allowlist for one line would be widening the control for
+       * convenience.
+       */
+      this.structured.event('warn', 'github.sync.stamp_failed', {
+        provider: 'github',
+        operation: 'stamp_last_synced_at',
+        errorCategory: 'dependency',
+      });
     }
   }
 

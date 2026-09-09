@@ -1,5 +1,7 @@
 import type { ThrottlerOptions } from '@nestjs/throttler';
 
+import { currentEnvironment } from './environment.js';
+
 /*
  * Request limits, in one place with their reasons.
  *
@@ -59,11 +61,41 @@ export const IMPORT_THROTTLE_LIMIT = 10;
 export const WORKER_THROTTLE_TTL_MS = 60_000;
 export const WORKER_THROTTLE_LIMIT = 120;
 
+/**
+ * The default tier, raised out of the way under NODE_ENV=test.
+ *
+ * The counter is in-memory and per PROCESS, and the hermetic suite runs
+ * many controller specs in one process against the same synthetic client
+ * address - so their requests all land in one bucket. At 300/min that
+ * bucket fills, and a test asserting a 404 gets a 429 instead. It showed
+ * up exactly as it would in the wild: intermittently, in whichever spec
+ * happened to run last.
+ *
+ * Raised rather than disabled, so the guard is still mounted and still in
+ * the request path during tests - a limit nobody reaches is a different
+ * thing from a guard that is not there, and only the first keeps the
+ * wiring under test.
+ *
+ * This is a test-environment concern, not a production one. The real
+ * per-process limitation is unchanged and still belongs to PR-6, which
+ * owns the shared store.
+ */
+function defaultLimit(): number {
+  /*
+   * Through currentEnvironment() rather than process.env directly, so
+   * configuration reads stay in the one file the security boundary spec
+   * permits them in - which is the check that caught this the first time.
+   */
+  return currentEnvironment() === 'test'
+    ? 1_000_000
+    : DEFAULT_THROTTLE_LIMIT;
+}
+
 export const THROTTLE_TIERS: ThrottlerOptions[] = [
   {
     name: 'default',
     ttl: DEFAULT_THROTTLE_TTL_MS,
-    limit: DEFAULT_THROTTLE_LIMIT,
+    limit: defaultLimit(),
   },
 ];
 

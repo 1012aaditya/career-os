@@ -117,20 +117,30 @@ describe('whose data an endpoint can reach', () => {
 
 describe('what may reach a log', () => {
   /*
-   * PR-1 found a console.error printing a storage path - which embeds a
-   * user id and their own filename, usually their real name - alongside a
-   * raw provider error. PR-2 removed it. This keeps it removed, and keeps
-   * the next one from arriving.
+   * The policy changed in PR-5, and this test changed with it.
    *
-   * PR-5 owns real structured logging. Until it exists, the honest amount
-   * of console output on a path that handles personal data is none.
+   * PR-3 enforced "log nothing", which was the honest interim position
+   * while there was nothing safe to log INTO: PR-1 had found a
+   * console.error printing a storage path - which embeds a user id and
+   * their own filename, usually their real name.
+   *
+   * Silence is no longer the right answer, because it also meant a
+   * production incident was invisible. PR-5 replaced it with a structured
+   * logger over an allowlist, so the rule is now about HOW a line is
+   * written rather than whether one is.
    */
-  it('writes nothing to the console outside the operator CLI', () => {
+  it('writes to the console only from the CLI, startup and the logger', () => {
     const ALLOWED = [
       /* The operator CLI. Its whole purpose is printing to a terminal. */
       'market-graph/market-graph.cli.ts',
       /* One startup line naming the environment. No URL, no credential. */
       'main.ts',
+      /*
+       * The structured logger itself. It writes the JSON line that every
+       * other module produces through it, and its fields have already been
+       * filtered by log-fields.ts before they reach here.
+       */
+      'observability/structured-logger.ts',
     ];
 
     const offenders: string[] = [];
@@ -143,7 +153,7 @@ describe('what may reach a log', () => {
       }
 
       if (
-        /\bconsole\.(log|error|warn|info|debug)\s*\(/.test(
+        /\bconsole\.(log|error|warn|info|debug)\s*\(|process\.stdout\.write/.test(
           stripComments(readFileSync(file, 'utf8')),
         )
       ) {
@@ -152,6 +162,57 @@ describe('what may reach a log', () => {
     }
 
     expect(offenders).toEqual([]);
+  });
+
+  /*
+   * The rule that replaces "log nothing": no value is interpolated into a
+   * log call.
+   *
+   * A template literal in a logger argument is exactly how `for user
+   * ${userId}` got into three Phase 7 services. It looks like formatting
+   * and is in fact an unbounded channel for whatever the variable holds -
+   * a token, an email, a filename - which no allowlist can filter, because
+   * by the time it reaches the logger it is one opaque string.
+   *
+   * The structured logger takes an event CODE and a field object instead,
+   * and that object IS filtered. So a backtick in a log call is the shape
+   * this forbids.
+   */
+  it('interpolates no value into a log call', () => {
+    const offenders: string[] = [];
+
+    for (const file of files) {
+      const relative = file.slice(SRC.length);
+
+      /* The CLI prints operator output to a terminal, not to a log sink. */
+      if (relative === 'market-graph/market-graph.cli.ts') {
+        continue;
+      }
+
+      const code = stripComments(readFileSync(file, 'utf8'));
+
+      for (const match of code.matchAll(
+        /\.(log|warn|error|debug|verbose|fatal|event|failure)\s*\(\s*`([^`]*)`/g,
+      )) {
+        if ((match[2] ?? '').includes('${')) {
+          offenders.push(`${relative}: ${match[2]?.slice(0, 50)}`);
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('detects a planted interpolated log, so the scan is not vacuous', () => {
+    const planted = 'this.logger.warn(`sync failed for user ${userId}`)';
+
+    const found = [
+      ...planted.matchAll(
+        /\.(log|warn|error|debug|verbose|fatal|event|failure)\s*\(\s*`([^`]*)`/g,
+      ),
+    ].some((match) => (match[2] ?? '').includes('${'));
+
+    expect(found).toBe(true);
   });
 
   /*

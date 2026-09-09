@@ -1,7 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { StructuredLogger } from '../../observability/structured-logger.js';
 import { connectionTokenAad } from '../crypto/aad.js';
 import {
   fromStorageBytes,
@@ -74,14 +75,21 @@ export class GithubConnectionService {
    * a user id. No token, no ciphertext, no error object from the HTTP
    * client.
    */
-  private readonly logger = new Logger(
-    GithubConnectionService.name,
-  );
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly encryption: EncryptionService,
     private readonly github: GithubApiClient,
+    /*
+     * Optional with a default, matching the pattern the source clients
+     * already use for their injected sleep and credentials. The container
+     * supplies the shared singleton; the default exists so the Phase 7
+     * specs, which construct these services directly with a fixed
+     * argument list, keep working without being rewritten for a
+     * diagnostics change.
+     */
+    @Optional()
+    private readonly structured: StructuredLogger = new StructuredLogger(),
   ) {}
 
   /**
@@ -326,15 +334,25 @@ export class GithubConnectionService {
          * never passed to the logger: if it came from the HTTP client it
          * would carry the Authorization header that failed.
          */
-        this.logger.warn(
-          `GitHub revocation failed for user ${userId}: ${
+        this.structured.event('warn', 'github.revocation.failed', {
+          /*
+           * A pseudonym, not the user id. PR-5: the id is the key that
+           * indexes this person's career history and does not belong in a
+           * log aggregator, while "the same person failed twice" still
+           * needs to be answerable.
+           */
+          actor: this.structured.actor(userId),
+          provider: 'github',
+          operation:
+            error instanceof GithubApiError ? error.operation : 'revoke_grant',
+          statusCode:
+            error instanceof GithubApiError ? (error.status ?? null) : null,
+          errorCode:
             error instanceof GithubApiError
-              ? `${error.operation} status=${
-                  error.status ?? 'none'
-                } code=${error.code ?? 'none'}`
-              : 'local_error'
-          }`,
-        );
+              ? (error.code ?? 'none')
+              : 'local_error',
+          errorCategory: 'dependency',
+        });
       }
     }
 

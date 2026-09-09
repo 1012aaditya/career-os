@@ -1,6 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 
 import { OAuthStateService } from '../oauth/oauth-state.service.js';
+
+import { StructuredLogger } from '../../observability/structured-logger.js';
 
 import {
   GithubApiClient,
@@ -50,15 +52,22 @@ export type AuthorizationRequestResult = {
 
 @Injectable()
 export class GithubOAuthService {
-  private readonly logger = new Logger(
-    GithubOAuthService.name,
-  );
 
   constructor(
     private readonly config: GithubOAuthConfig,
     private readonly state: OAuthStateService,
     private readonly api: GithubApiClient,
     private readonly connections: GithubConnectionService,
+    /*
+     * Optional with a default, matching the pattern the source clients
+     * already use for their injected sleep and credentials. The container
+     * supplies the shared singleton; the default exists so the Phase 7
+     * specs, which construct these services directly with a fixed
+     * argument list, keep working without being rewritten for a
+     * diagnostics change.
+     */
+    @Optional()
+    private readonly structured: StructuredLogger = new StructuredLogger(),
   ) {}
 
   /**
@@ -283,8 +292,17 @@ export class GithubOAuthService {
           } code=${error.code ?? 'none'}`
         : 'unexpected_error';
 
-    this.logger.warn(
-      `GitHub ${operation} failed for user ${userId}: ${detail}`,
-    );
+    /*
+     * The user id used to be interpolated here in plain text. Replaced in
+     * PR-5 by a stable pseudonym: still enough to see one person failing
+     * repeatedly, without the log carrying the key to their data.
+     */
+    this.structured.event('warn', 'github.oauth.failed', {
+      actor: this.structured.actor(userId),
+      provider: 'github',
+      operation,
+      errorCode: detail,
+      errorCategory: 'dependency',
+    });
   }
 }

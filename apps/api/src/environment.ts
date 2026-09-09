@@ -120,3 +120,22 @@ export function corsAllowedOrigins(
      */
     .filter((origin) => origin !== '*');
 }
+
+/**
+ * The salt that turns a user id into a log pseudonym.
+ *
+ * Read here rather than in log-fields.ts for two reasons. It keeps that
+ * module pure - every function a value of its arguments, which is what
+ * makes the allowlist testable - and it keeps configuration reads in the
+ * one file the security boundary spec allows them in.
+ *
+ * An unset salt is not a failure and not a placeholder: pseudonyms are
+ * still stable within the process, they are simply comparable across
+ * deployments that also have none. Set it per environment so a pseudonym
+ * from staging says nothing about production.
+ */
+export function logPseudonymSalt(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return env.LOG_PSEUDONYM_SALT ?? '';
+}

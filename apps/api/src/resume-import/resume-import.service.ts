@@ -10,7 +10,10 @@ import { Prisma } from '@prisma/client';
 
 import { randomUUID } from 'node:crypto';
 
-import { PrismaService } from '../prisma/prisma.service.js';
+import {
+  PrismaService,
+  transactionBudget,
+} from '../prisma/prisma.service.js';
 import { SupabaseClientService } from '../auth/supabase.client.js';
 import { CareerGraphIngestionService } from '../career-graph/career-graph-ingestion.service.js';
 import { UserStorageService } from '../account/user-storage.service.js';
@@ -118,7 +121,21 @@ export class ResumeImportService {
           storagePath,
         },
       });
-    });
+      /*
+       * The budget is stated rather than inherited. This is the only
+       * interactive transaction on a user request path - the purge and
+       * ingestion transactions already name their own - and it was the one
+       * failing with P2028 in PR-4.
+       *
+       * The values are Prisma's own defaults, deliberately unchanged: the
+       * PR-6 measurement in prisma.service.ts shows the cause is
+       * connection HOLD TIME under trans-Pacific latency, not a budget
+       * that is too tight, and that raising this number converts a fast
+       * clean failure into a slow murky one. What it buys is a knob
+       * production can turn without a deploy, and a number an operator can
+       * read.
+       */
+    }, transactionBudget());
 
     const {
       data,

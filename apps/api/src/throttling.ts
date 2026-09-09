@@ -22,12 +22,18 @@ import { currentEnvironment } from './environment.js';
  * unbounded caller is real: storage objects, database rows, and attempts
  * at a secret.
  *
- * WHAT THIS DOES NOT DO. The store is in-memory and per-process, so the
- * effective limit is multiplied by the instance count. It also keys on IP,
- * which behind a load balancer means the limit is only as good as the
- * proxy configuration - `trust proxy` and a shared store are both PR-6,
- * because both are decisions about a deployment that does not exist yet.
- * Stated here rather than discovered later.
+ * WHERE THE COUNT LIVES. PR-6 moved it out of process memory: with
+ * REDIS_URL set, every instance increments one counter in Redis, so these
+ * numbers mean what they say regardless of how many instances there are
+ * and regardless of which one the load balancer picked. Unset - one
+ * process - keeps the in-memory counter, which is correct for local
+ * development and for the test tier. See throttling/redis-throttler.storage.ts,
+ * including what happens when Redis is unreachable.
+ *
+ * These limits key on IP, so they are only as good as `trust proxy`. That
+ * is now an explicit hop COUNT defaulting to 0 rather than a boolean -
+ * see trustedProxyHops() in environment.ts for why trusting the whole
+ * chain would quietly delete the limits below.
  */
 
 /** The tier every route gets unless it asks for another. */

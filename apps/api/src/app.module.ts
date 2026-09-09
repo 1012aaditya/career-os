@@ -1,6 +1,12 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import {
+  ThrottlerGuard,
+  ThrottlerModule,
+  ThrottlerStorage,
+  ThrottlerStorageService,
+} from '@nestjs/throttler';
+import { Redis } from 'ioredis';
 import { CareerGraphModule } from './career-graph/career-graph.module.js';
 import { ConfigModule } from '@nestjs/config';
 import { ResumeProcessingModule } from './resume-processing/resume-processing.module.js';
@@ -16,6 +22,9 @@ import { ResumeImportModule } from './resume-import/resume-import.module.js';
 import { IntegrationsModule } from './integrations/integrations.module.js';
 import { MarketGraphModule } from './market-graph/market-graph.module.js';
 import { THROTTLE_TIERS } from './throttling.js';
+import { RedisThrottlerStorage } from './throttling/redis-throttler.storage.js';
+import { redisUrl } from './environment.js';
+import { StructuredLogger } from './observability/structured-logger.js';
 
 @Module({
   imports: [
@@ -26,14 +35,14 @@ import { THROTTLE_TIERS } from './throttling.js';
      * Request throttling. See throttling.ts for what each tier protects
      * and why the numbers are what they are.
      *
-     * The store is in-memory, which is a deliberate limitation rather than
-     * an oversight: it counts per PROCESS, so with N instances the
-     * effective ceiling is N times the configured limit. That is a real
-     * weakening and it is still strictly better than the nothing that was
-     * here before - it turns an unbounded credential-guessing loop into a
-     * bounded one. A shared store needs infrastructure that does not exist
-     * yet, so PR-6 owns replacing it once the instance count is a decision
-     * somebody has made.
+     * The COUNTER now lives in Redis when REDIS_URL is set, so the limit
+     * holds across instances instead of being multiplied by the instance
+     * count. See throttling/redis-throttler.storage.ts, including what
+     * happens when Redis is unreachable - which is to fall back to the
+     * per-process counter rather than to no limit at all.
+     *
+     * With REDIS_URL unset the behaviour is exactly PR-2's, which is
+     * correct for one process: local development and the test tier.
      */
     ThrottlerModule.forRoot(THROTTLE_TIERS),
     /*
@@ -58,6 +67,41 @@ import { THROTTLE_TIERS } from './throttling.js';
      * limit opt in with @Throttle; nothing opts out.
      */
     { provide: APP_GUARD, useClass: ThrottlerGuard },
+    /*
+     * The shared counter, substituted for the module's in-memory default.
+     *
+     * Built by a factory rather than declared as a class, because whether
+     * there IS a shared store is a deployment fact read at startup. The
+     * in-memory service is constructed either way and handed to the Redis
+     * store as its fallback, so the degraded path is the same object the
+     * healthy path would have used.
+     *
+     * lazyConnect keeps a missing Redis from failing the boot: the first
+     * increment connects, and if it cannot, the fallback answers and the
+     * failure is logged once per degraded window rather than per request.
+     */
+    {
+      provide: ThrottlerStorage,
+      useFactory: (logger: StructuredLogger) => {
+        const url = redisUrl();
+        const memory = new ThrottlerStorageService();
+
+        if (url === null) {
+          return memory;
+        }
+
+        return new RedisThrottlerStorage(
+          new Redis(url, {
+            lazyConnect: true,
+            maxRetriesPerRequest: 1,
+            enableOfflineQueue: false,
+          }),
+          memory,
+          logger,
+        );
+      },
+      inject: [StructuredLogger],
+    },
     /*
      * One access line per request, and one diagnostic line per failure.
      * Registered globally rather than per-controller so a route added

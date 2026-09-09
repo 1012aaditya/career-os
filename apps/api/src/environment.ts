@@ -139,3 +139,64 @@ export function logPseudonymSalt(
 ): string {
   return env.LOG_PSEUDONYM_SALT ?? '';
 }
+
+/**
+ * Where the shared rate-limit counter lives.
+ *
+ * Unset is a deliberate, supported state and not a misconfiguration: it
+ * means "one process", which is exactly right for local development and
+ * for the test tier, and the throttler falls back to the in-memory counter
+ * PR-2 shipped. It becomes wrong only when a second instance exists, which
+ * is a deployment decision and therefore a deployment's job to configure.
+ *
+ * Returned as an opaque string and never logged. A Redis URL carries a
+ * password in the same position a Postgres URL does, which is why it is
+ * read here - the one file the security boundary spec permits
+ * configuration reads in - rather than wherever a client happens to be
+ * constructed.
+ */
+export function redisUrl(env: NodeJS.ProcessEnv = process.env): string | null {
+  const raw = env.REDIS_URL;
+
+  return raw === undefined || raw.trim() === '' ? null : raw.trim();
+}
+
+/**
+ * How many reverse-proxy hops in front of this process may be trusted.
+ *
+ * THIS IS A SECURITY SETTING, NOT PLUMBING. Express resolves `req.ip` by
+ * walking X-Forwarded-For from the right, skipping this many hops. The
+ * rate limiter keys on `req.ip`. So:
+ *
+ *   0 - the default - means "no proxy": `req.ip` is the socket address,
+ *   which a client cannot forge. Correct for local development and for
+ *   any deployment reached directly.
+ *
+ *   1 means "exactly one proxy appends the real client address", which is
+ *   what a single managed load balancer (Render, and most PaaS edges)
+ *   does. The header is rewritten by that proxy, so the value is trusted
+ *   only as far as the proxy.
+ *
+ *   `true` - trust everything - is NOT reachable from this function, and
+ *   that is deliberate. It makes Express believe the LEFTMOST entry in a
+ *   header the CLIENT controls. Every caller then has a free choice of
+ *   source address, which turns the IP-keyed throttle into no throttle at
+ *   all: send a different X-Forwarded-For each request and every one gets
+ *   a fresh budget. It is the single easiest way to disable rate limiting
+ *   while believing it is on.
+ *
+ * Defaulting to 0 fails safe: getting this too LOW throttles everyone
+ * behind a proxy as one address, which is visible and annoying. Too HIGH
+ * silently removes the limit.
+ */
+export function trustedProxyHops(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.TRUSTED_PROXY_HOPS;
+
+  if (raw === undefined || raw.trim() === '') {
+    return 0;
+  }
+
+  const value = Number(raw);
+
+  return Number.isInteger(value) && value >= 0 ? value : 0;
+}

@@ -1,35 +1,123 @@
 name: CI
 
+# Runs on every pull request, not only those targeting main. A branch that
+# is never opened against main still gets checked, which is the case that
+# matters here: PR-1 through PR-6 all lived on one long-running branch, and
+# under the previous trigger none of them were ever built by CI.
 on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 jobs:
+  # Static checks. No services, so this fails fast and cheaply on the
+  # mistakes that do not need a database to detect.
   check:
+    name: Lint, typecheck, build
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
         with:
           version: 11.25.0
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm build
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+  # The hermetic tiers: no Postgres, no Redis, no network. These are the
+  # tests that must never be skipped for want of infrastructure, which is
+  # exactly why they run in a job that has none to be missing.
+  test:
+    name: Unit tests (API + mobile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
 
-      - name: Typecheck
-        run: pnpm typecheck
+      - name: API tests
+        run: pnpm test
+        working-directory: apps/api
 
-      - name: Build
-        run: pnpm build
+      - name: Mobile tests
+        run: pnpm test
+        working-directory: apps/mobile
+
+  # The infrastructure tier, against a REAL Postgres and a REAL Redis.
+  #
+  # This job exists because the alternative is worse than not having it. A
+  # pipeline that runs `test:db` without a database does not quietly do
+  # less - it reports a guarantee nobody checked. The two things this tier
+  # proves - a row lock serialising concurrent import creation, and one
+  # rate-limit budget shared across instances - ARE properties of the
+  # infrastructure, so no double can stand in for it.
+  infrastructure:
+    name: Database and Redis tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          # Ephemeral, localhost-only, destroyed with the runner. Not a
+          # credential: there is nothing here to protect and nothing to
+          # rotate. Real credentials arrive as repository secrets and are
+          # never written into this file.
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: career_os_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/career_os_test
+      MARKET_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/career_os_test
+      THROTTLE_TEST_REDIS_URL: redis://localhost:6379
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # `migrate deploy`, never `migrate dev`. The same command production
+      # runs: it applies the committed migrations in order and refuses to
+      # invent one. So this step also continuously proves that the
+      # migration history applies cleanly to an EMPTY database, which is
+      # the only way a production database will ever be created.
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+        working-directory: apps/api
+
+      - name: Database and Redis tests
+        run: pnpm test:db
+        working-directory: apps/api

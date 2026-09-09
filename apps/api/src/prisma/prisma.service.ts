@@ -68,6 +68,62 @@ import { PrismaPg } from '@prisma/adapter-pg';
 /** Per-process. The number the database sees is this times the instances. */
 const DEFAULT_POOL_MAX = 10;
 
+/*
+ * TRANSACTION BUDGET, and why PR-6 left the numbers alone.
+ *
+ * PR-4 saw P2028 - "Unable to start a transaction in the given time" -
+ * against the Sydney pooler, 2 failures in 5. PR-6 reproduced it under a
+ * latency-injecting proxy in front of a LOCAL Postgres, holding schema,
+ * query shape and pool config identical so that round-trip time was the
+ * only variable. The measurements, 40 concurrent imports for distinct
+ * users:
+ *
+ *   RTT     pool  succeeded  P2028   median
+ *   0ms     10    40         0       94ms
+ *   250ms   10    11         29      2008ms
+ *   250ms   20    21         19      2004ms
+ *   250ms   40    40         0       1890ms
+ *
+ * Read the second and third rows together: the successes track the POOL
+ * SIZE, not the load. That is the whole diagnosis. An import transaction
+ * is six round trips - BEGIN, the row lock, two counts, the insert,
+ * COMMIT - so at 250ms it HOLDS a connection for about 1.9s. maxWait is
+ * 2s. One pool's worth of transactions therefore starts, and everything
+ * behind them waits longer than the budget allows and fails before doing
+ * any work.
+ *
+ * So P2028 is not a timeout that is too small. It is hold time that is
+ * twenty times too long, and hold time here is a function of DISTANCE.
+ * Co-locating the API with the database takes the median from 2008ms to
+ * 94ms and the failures from 29 to 0 - with the pool unchanged at 10.
+ *
+ * TWO FIXES WERE MEASURED AND REJECTED.
+ *
+ *   Raising maxWait to 15s: 21 of 40 still failed, but the failures moved
+ *   from a fast, precisely-labelled P2028 to a generic error at a 10s
+ *   median and a 20s maximum. That is not a fix; it is the same failure
+ *   with worse latency and a worse name.
+ *
+ *   Enlarging the pool: it "works" only when the transactions do not
+ *   contend. Under the real contention this transaction is FOR - many
+ *   imports by ONE user, serialised on that user's row lock - a pool of
+ *   40 was strictly worse than a pool of 10, median 21s, because a larger
+ *   pool only lets more requests hold a connection while blocked on the
+ *   lock.
+ *
+ * Hence: the defaults below are Prisma's own, restated rather than
+ * changed. Nothing here is tuned to paper over topology. They are made
+ * explicit and configurable because production must be able to move them
+ * without a code change, and because a budget nobody can see is a budget
+ * nobody can reason about - PR-4 lost days to exactly that.
+ */
+
+/** Time to acquire a connection and BEGIN. Prisma's default, made visible. */
+const DEFAULT_TRANSACTION_MAX_WAIT_MS = 2_000;
+
+/** Time the transaction body may take once started. Prisma's default. */
+const DEFAULT_TRANSACTION_TIMEOUT_MS = 5_000;
+
 /** How long a request may wait for a free connection before failing. */
 const DEFAULT_CONNECTION_TIMEOUT_MS = 10_000;
 
@@ -131,6 +187,26 @@ export function poolConfigFromEnv(connectionString: string) {
      * worker and with migrations.
      */
     application_name: process.env.DATABASE_APPLICATION_NAME ?? 'career-os-api',
+  };
+}
+
+/**
+ * The budget for an interactive transaction on the request path.
+ *
+ * Exported so a caller states its budget rather than inheriting an
+ * invisible library default, and so the numbers can be asserted in a test
+ * without opening a connection.
+ */
+export function transactionBudget(): { maxWait: number; timeout: number } {
+  return {
+    maxWait: positiveIntFromEnv(
+      'DATABASE_TRANSACTION_MAX_WAIT_MS',
+      DEFAULT_TRANSACTION_MAX_WAIT_MS,
+    ),
+    timeout: positiveIntFromEnv(
+      'DATABASE_TRANSACTION_TIMEOUT_MS',
+      DEFAULT_TRANSACTION_TIMEOUT_MS,
+    ),
   };
 }
 

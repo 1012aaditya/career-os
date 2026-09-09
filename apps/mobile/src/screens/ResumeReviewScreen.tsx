@@ -1,4 +1,9 @@
 import React, { useEffect, useState } from 'react';
+import {
+  useNavigation,
+  useRoute,
+  type RouteProp,
+} from '@react-navigation/native';
 
 /*
  * Errors are routed through describeError rather than rendered from a
@@ -84,30 +89,55 @@ type ResumeImport = {
   id: string;
   fileName: string;
   status: string;
-  extractionResult?: {
-    source?: string;
-    extraction?: Extraction;
-  } | null;
+  /*
+   * `unknown`, matching the API client, because that is what it honestly
+   * is: a jsonb column written by the worker and re-written by the user's
+   * edits. Declaring a structured shape here did not make the data have
+   * that shape - it only moved the lie to the type level, and left this
+   * screen unassignable from the value the API actually returns.
+   */
+  extractionResult?: unknown;
 };
 
+/**
+ * Reads an extraction out of that jsonb, or gives up.
+ *
+ * A narrowing rather than a cast. The row may predate the current shape,
+ * or be null while the worker is still running, and a cast would turn
+ * either into a crash on first property access.
+ */
+function extractionOf(value: unknown): Extraction | null {
+  if (typeof value !== 'object' || value === null) {
+    return null;
+  }
 
-type Props = {
-  route: {
-    params: {
-      resumeImportId: string;
-    };
-  };
-  navigation: {
-    goBack: () => void;
-  };
-};
+  const extraction = (value as { extraction?: unknown }).extraction;
+
+  return typeof extraction === 'object' && extraction !== null
+    ? (extraction as Extraction)
+    : null;
+}
 
 
-export default function ResumeReviewScreen({
-  route,
-  navigation,
-}: Props) {
-  const { resumeImportId } = route.params;
+/*
+ * Params read through the hook rather than declared as props, which is the
+ * pattern MarketPostingScreen already established here.
+ *
+ * The navigator's screen type expects a component taking no required
+ * props, so annotating `route` and `navigation` as required made the
+ * <Stack.Screen> mounting this fail to typecheck - one of the four
+ * pre-existing mobile type errors carried since PR-4. The hook is the
+ * typed way in.
+ */
+type ResumeReviewRoute = RouteProp<
+  { ResumeReview: { resumeImportId: string } },
+  'ResumeReview'
+>;
+
+
+export default function ResumeReviewScreen() {
+  const { resumeImportId } = useRoute<ResumeReviewRoute>().params;
+  const navigation = useNavigation();
 
   const [resumeImport, setResumeImport] =
     useState<ResumeImport | null>(null);
@@ -133,9 +163,7 @@ export default function ResumeReviewScreen({
 
       setResumeImport(data);
 
-      setExtraction(
-        data.extractionResult?.extraction ?? null,
-      );
+      setExtraction(extractionOf(data.extractionResult));
     } catch (error) {
       Alert.alert(
         'Unable to load resume',

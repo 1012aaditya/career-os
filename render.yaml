@@ -1,0 +1,150 @@
+# Render blueprint for the production API.
+#
+# NOT YET APPLIED. There is no Render account reachable from this machine,
+# so nothing below has been deployed or validated by Render's schema
+# checker. It is written from the deployment this repository actually needs
+# rather than from a template, and the three things most likely to need
+# correcting on first apply are called out inline: the region id, the
+# key-value service type, and the plan names.
+#
+# Apply with: Render dashboard -> Blueprints -> New Blueprint Instance,
+# pointed at this repository.
+
+services:
+  - type: web
+    name: career-os-api
+    runtime: docker
+
+    # Built from the repository root, because this is a pnpm workspace and
+    # the lockfile that makes the build reproducible is at the root. A
+    # context of apps/api cannot see it. See apps/api/Dockerfile.
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: .
+
+    # US East. The single most important line in this file.
+    #
+    # PR-6 measured that P2028 is caused by connection HOLD time, and hold
+    # time is round trips multiplied by distance: at 250ms RTT an import
+    # transaction holds a connection for ~1.9s against a 2s budget, and 29
+    # of 40 concurrent imports failed. At ~0ms the same pool absorbed all
+    # 40 with a 94ms median. So the API must sit in the same region as the
+    # database, and the production Supabase project must be created in US
+    # East to match. Co-location is the fix; everything else was measured
+    # and rejected.
+    #
+    # VERIFY THE REGION ID on first apply - Render has used both `virginia`
+    # and `ohio` for US East. Either satisfies the requirement; what must
+    # not happen is this service landing in a different region from the
+    # database.
+    region: virginia
+
+    plan: starter
+
+    # Readiness, not liveness. Render uses this to decide whether an
+    # instance receives traffic, which is precisely what /health/ready
+    # answers: it returns 503 when the database is unreachable, so a broken
+    # instance is taken out of rotation instead of serving errors.
+    #
+    # Pointing this at /health/live would be a subtle and expensive
+    # mistake: liveness has no dependencies by design and returns 200 from
+    # a process that cannot reach Postgres at all.
+    healthCheckPath: /v1/health/ready
+
+    # Migrations run HERE - after the image is built, before the new
+    # instance takes traffic - and never at application startup. Startup
+    # migration means every instance in a scaled service races to run the
+    # same DDL, and a failed migration becomes a crash loop rather than a
+    # halted deploy.
+    #
+    # `migrate deploy` applies committed migrations in order and refuses to
+    # generate one. It is the only migration command that should ever see
+    # production. This is why the Prisma CLI is a production dependency and
+    # why prisma/ is copied into the runtime image.
+    preDeployCommand: npx prisma migrate deploy
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      # Exactly one hop: Render's edge. Not `true`.
+      #
+      # The rate limiter keys on req.ip, which Express derives from
+      # X-Forwarded-For - a header the client sends. Trusting the whole
+      # chain lets any caller choose their own source address and get an
+      # unlimited budget. See trustedProxyHops() in src/environment.ts.
+      - key: TRUSTED_PROXY_HOPS
+        value: '1'
+
+      # Per process. The database sees this multiplied by the instance
+      # count, plus the worker, plus whatever a migration holds.
+      #
+      # 10 is measured, not inherited: co-located, a pool of 10 served 40
+      # concurrent distinct-user import transactions with a 94ms median and
+      # zero failures. Enlarging it was measured too, and was WORSE under
+      # the contention this transaction actually faces - many imports by
+      # one user, serialised on that user's row lock - because a bigger
+      # pool only lets more requests hold a connection while blocked.
+      #
+      # Raise this only after checking the Supabase pooler's own client
+      # limit, which is shared with the worker and with migrations.
+      - key: DATABASE_POOL_MAX
+        value: '10'
+
+      - key: DATABASE_APPLICATION_NAME
+        value: career-os-api
+
+      # Shared rate-limit counter. Without it, each instance counts on its
+      # own and the limits in throttling.ts are silently multiplied by the
+      # instance count.
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: career-os-throttle
+          property: connectionString
+
+      # Set in the Render dashboard, never in git. `sync: false` makes
+      # Render prompt for each one at apply time and keeps the value out of
+      # this file and out of the repository.
+      #
+      # Every one of these must be GENERATED for production rather than
+      # copied from development - a separate database, separate Supabase
+      # project, separate worker secret, separate encryption keys.
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: RESUME_WORKER_SECRET
+        sync: false
+      - key: TOKEN_ENCRYPTION_KEYS
+        sync: false
+      - key: TOKEN_ENCRYPTION_ACTIVE_KEY_VERSION
+        sync: false
+      - key: LOG_PSEUDONYM_SALT
+        sync: false
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_OAUTH_CALLBACK_URL
+        sync: false
+      - key: GITHUB_OAUTH_MOBILE_REDIRECT_URI
+        sync: false
+
+  # The shared throttle counter.
+  #
+  # VERIFY THE TYPE on first apply: Render renamed its Redis product to Key
+  # Value, and blueprints have accepted both `redis` and `keyvalue`.
+  #
+  # This holds rate-limit counters and nothing else. Every key is written
+  # with a TTL in the same atomic step that creates it, so it is bounded by
+  # construction and needs no eviction policy to stay small. Losing it
+  # entirely is survivable: the limiter degrades to per-process counting.
+  - type: keyvalue
+    name: career-os-throttle
+    region: virginia
+    plan: starter
+    # Reachable only from inside the Render private network. A rate-limit
+    # store exposed to the internet is a store anybody can flush.
+    ipAllowList: []

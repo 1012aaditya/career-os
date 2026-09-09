@@ -133,6 +133,13 @@ describe('what may reach a log', () => {
     const ALLOWED = [
       /* The operator CLI. Its whole purpose is printing to a terminal. */
       'market-graph/market-graph.cli.ts',
+      /*
+       * The storage backup CLI, same reason. It prints COUNTS - copied,
+       * unchanged, failed - and deliberately never the name of an object
+       * it failed on: a resume's storage path ends in a filename that is
+       * usually the person's real name.
+       */
+      'operations/storage-backup.cli.ts',
       /* One startup line naming the environment. No URL, no credential. */
       'main.ts',
       /*
@@ -184,8 +191,11 @@ describe('what may reach a log', () => {
     for (const file of files) {
       const relative = file.slice(SRC.length);
 
-      /* The CLI prints operator output to a terminal, not to a log sink. */
-      if (relative === 'market-graph/market-graph.cli.ts') {
+      /* The CLIs print operator output to a terminal, not to a log sink. */
+      if (
+        relative === 'market-graph/market-graph.cli.ts' ||
+        relative === 'operations/storage-backup.cli.ts'
+      ) {
         continue;
       }
 
@@ -282,6 +292,13 @@ describe('where a privileged credential may be used', () => {
       'environment.ts',
       /* Connection string and pool tuning, before the container exists. */
       'prisma/prisma.service.ts',
+      /*
+       * Names the destination bucket for the storage backup. Not a
+       * credential - the Supabase client it copies with is the shared one
+       * from auth/supabase.client.ts, so this CLI reads a bucket NAME and
+       * never a key.
+       */
+      'operations/storage-backup.cli.ts',
     ];
 
     const offenders = files.filter((file) => {

@@ -1,5 +1,6 @@
 import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import {
   DocumentBuilder,
   SwaggerModule,
@@ -10,10 +11,11 @@ import {
   corsAllowedOrigins,
   currentEnvironment,
   shouldServeApiDocs,
+  trustedProxyHops,
 } from './environment.js';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   /*
    * Security headers, from a maintained implementation rather than a
@@ -54,6 +56,21 @@ async function bootstrap() {
    *
    *   X-Powered-By is removed, which is free.
    */
+  /*
+   * How far to believe X-Forwarded-For.
+   *
+   * Set before anything that reads req.ip - which is the throttler guard,
+   * on every request. See trustedProxyHops() for why this is a number of
+   * hops and why `true` is not an option: with an IP-keyed rate limiter,
+   * trusting a client-supplied header is the same as having no limiter.
+   *
+   * 0 by default, so a deployment that has not thought about its proxy
+   * gets the safe answer rather than the convenient one.
+   */
+  const proxyHops = trustedProxyHops();
+
+  app.set('trust proxy', proxyHops);
+
   app.use(
     helmet({
       contentSecurityPolicy: false,
@@ -149,7 +166,7 @@ async function bootstrap() {
    * needs to be able to confirm from a log they are already reading.
    */
   process.stdout.write(
-    `[startup] environment=${currentEnvironment()} docs=${shouldServeApiDocs() ? 'on' : 'off'} cors-origins=${allowedOrigins.length}\n`,
+    `[startup] environment=${currentEnvironment()} docs=${shouldServeApiDocs() ? 'on' : 'off'} cors-origins=${allowedOrigins.length} trust-proxy-hops=${proxyHops}\n`,
   );
 }
 

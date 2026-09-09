@@ -411,6 +411,27 @@ describe('what a purge may not quietly make easier', () => {
        * losing a row costs a rebuild and nothing else.
        */
       '20260909120000_add_market_search_projection',
+      /*
+       * The fourth, added deliberately in Phase 11. Partner, company and
+       * ATS coverage needed the source registry to be able to say what
+       * KIND of relationship a source is and where it stands in its access
+       * lifecycle - neither of which any existing column expressed, and
+       * both of which decide whether a source may be walked at all.
+       *
+       * Five columns on MarketSource, two enums, one CHECK constraint. No
+       * new table, and in particular no per-company or per-vendor
+       * structure: there is no CompanySource, no AtsSource and no
+       * GoogleSource, because the whole point of the phase is that a
+       * Google vacancy and a JobTech vacancy are the same kind of row.
+       *
+       * The CHECK constraint is the part that is not bookkeeping. It says
+       * a source may be enabled only from the ENABLED access state, which
+       * had been true in code and false in this database: two descriptors
+       * read `isEnabled: false` while their rows read true, because
+       * ensureSource's update block was empty and rows are not created
+       * twice.
+       */
+      '20260909180000_add_market_partner_source_access',
     ]);
   });
 });
@@ -671,5 +692,170 @@ describe('what the Market Graph may not store or serve', () => {
         `${read[1]}@${open}: true`,
       );
     }
+  });
+});
+
+/*
+ * Phase 11: credentials, and internal access material.
+ *
+ * Two rules, both enforced by reading the source tree, because both are
+ * the kind of rule that is kept by habit right up until the afternoon
+ * somebody is in a hurry.
+ *
+ *   A credential is read in ONE file and used in the client that needs
+ *   it. Nothing else may reach the environment for one.
+ *
+ *   The access lifecycle is INTERNAL. Which sources were refused, who was
+ *   asked what, and whether this host is configured are operator
+ *   questions; the read API answers reader questions.
+ */
+describe('what a credential may touch', () => {
+  const files = sources(MARKET_DIR);
+
+  it('found a real tree to scan', () => {
+    expect(files.length).toBeGreaterThan(10);
+  });
+
+  /*
+   * The environment is read in exactly one place. A client that read
+   * process.env itself would be a client holding a credential, and a
+   * client holding a credential is one console.log away from a log file
+   * full of them.
+   */
+  it('reads the environment for a credential in exactly one file', () => {
+    const offenders = files.filter((file) => {
+      const relative = file.slice(MARKET_DIR.length);
+
+      if (relative === 'sources/source-credentials.ts') {
+        return false;
+      }
+
+      return /process\.env|ConfigService/.test(
+        stripComments(readFileSync(file, 'utf8')),
+      );
+    });
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('detects a planted environment read, so the scan is not vacuous', () => {
+    expect(
+      /process\.env|ConfigService/.test('const key = process.env.SOME_KEY;'),
+    ).toBe(true);
+  });
+
+  /*
+   * The credential RESOLVER - the call that returns actual values - is
+   * reachable only from a source client. `state()` is fine anywhere,
+   * because it returns key names and an enum; `resolve()` is not.
+   */
+  it('resolves credential values only inside a source client', () => {
+    const offenders = files.filter((file) => {
+      const relative = file.slice(MARKET_DIR.length);
+
+      if (
+        relative === 'sources/source-credentials.ts' ||
+        /^sources\/[a-z0-9-]+\/[a-z0-9-]+\.client\.ts$/.test(relative)
+      ) {
+        return false;
+      }
+
+      return /credentials\.resolve\s*\(/.test(
+        stripComments(readFileSync(file, 'utf8')),
+      );
+    });
+
+    expect(offenders).toEqual([]);
+  });
+
+  /*
+   * A credential must never become part of what is STORED. queryParams is
+   * written verbatim onto every ingestion run and hashed into a
+   * fingerprint the API serves, so a key placed there would be a
+   * plaintext secret in the database and a brute-forceable commitment to
+   * it over HTTP. The registry spec checks the values; this checks that
+   * no code path assembles one.
+   */
+  it('never puts a resolved credential into a descriptor', () => {
+    const registry = readFileSync(
+      `${MARKET_DIR}sources/source-registry.ts`,
+      'utf8',
+    );
+
+    expect(/credentials\.resolve|process\.env/.test(stripComments(registry))).toBe(
+      false,
+    );
+  });
+});
+
+describe('what the read API may not learn about a source', () => {
+  const READ_PATHS = [
+    'market-graph.service.ts',
+    'market-graph.controller.ts',
+    'search/market-search.service.ts',
+    'search/market-search.controller.ts',
+  ];
+
+  /*
+   * accessNote records what was asked of whom, which partnerships are
+   * open, and why a source was refused. licenceNote is our own working
+   * reasoning about a licence - what was verified, which residual risks
+   * remain, and in one case which of a publisher's two APIs must never be
+   * called.
+   *
+   * Neither is reader-facing, and licenceNote was in fact being served on
+   * every job detail until Phase 11 replaced it with `attribution` - the
+   * credit a licence actually obliges us to display. The mobile client
+   * never rendered the note, so nothing was lost and a paragraph of
+   * internal material stopped leaving the building.
+   */
+  it('selects no internal access or licence prose on a job detail', () => {
+    const code = stripComments(
+      readFileSync(`${MARKET_DIR}search/market-search.service.ts`, 'utf8'),
+    );
+
+    for (const forbidden of ['accessNote', 'licenceNote', 'accessState']) {
+      expect(`market-search.service.ts: ${code.includes(forbidden)}`).toBe(
+        `market-search.service.ts: false`,
+      );
+    }
+
+    /* And the thing that replaced it is there, so this is not vacuous. */
+    expect(code).toContain('attribution');
+  });
+
+  it('never selects an access note on any read path', () => {
+    const offenders = READ_PATHS.filter((relative) =>
+      stripComments(readFileSync(`${MARKET_DIR}${relative}`, 'utf8')).includes(
+        'accessNote',
+      ),
+    );
+
+    expect(offenders).toEqual([]);
+  });
+
+  /*
+   * The health report names credential variables and quotes access notes.
+   * It is an operator tool, so it must not be reachable from anything with
+   * a route on it - the CLI is the only caller.
+   */
+  it('keeps the source health report off every HTTP surface', () => {
+    const offenders = sources(MARKET_DIR).filter((file) => {
+      const relative = file.slice(MARKET_DIR.length);
+
+      if (
+        relative === 'sources/market-source-health.service.ts' ||
+        relative === 'market-graph.cli.ts' ||
+        relative === 'market-graph-core.module.ts'
+      ) {
+        return false;
+      }
+
+      return stripComments(readFileSync(file, 'utf8')).includes(
+        'MarketSourceHealthService',
+      );
+    });
+
+    expect(offenders).toEqual([]);
   });
 });

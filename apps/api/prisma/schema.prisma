@@ -617,6 +617,75 @@ enum MarketSourceKind {
   SKILL_TAXONOMY
 }
 
+/// What KIND of relationship gives us a source's data.
+///
+/// Phase 11. The categories are about the RELATIONSHIP, not about the
+/// publisher's industry: a government open-data portal and a national job
+/// bank are both PUBLIC_OPEN_DATA because the same thing is true of both -
+/// the publisher put the data out under a licence and nobody had to be
+/// asked. An ATS is a different relationship even when its endpoint is
+/// equally open, because the ATS vendor does not own the posting text.
+///
+/// It is deliberately NOT a per-employer field. There is no GOOGLE, no
+/// AMAZON: a Google posting reaching us through an ATS is an ATS posting,
+/// and a per-company category would be a per-company registry wearing a
+/// different name.
+enum MarketSourceCategory {
+  /// A publisher's own open release under a licence anyone may rely on.
+  PUBLIC_OPEN_DATA
+  /// An employer publishing its own vacancies, under its own terms.
+  DIRECT_EMPLOYER
+  /// An applicant tracking system. The vendor hosts the text; the
+  /// EMPLOYER owns it, which is why an open ATS endpoint is not a grant.
+  ATS
+  /// An aggregator whose terms grant reuse - by public licence or by
+  /// contract. Distinguished from PUBLIC_OPEN_DATA because the grant is
+  /// to us rather than to the world, so it can be withdrawn.
+  LICENSED_AGGREGATOR
+  /// A feed reaching us because the rights-holder consented to
+  /// syndication, through an intermediary or directly.
+  PARTNER_FEED
+}
+
+/// Where a source stands in its access lifecycle.
+///
+/// The column exists because `isEnabled` answers "is it on" and nothing
+/// answered "why is it off". Six sources were off for six different
+/// reasons - an unresolved licence, an assessed refusal, a limitation in
+/// our own ingestion model - and all six were the same boolean.
+///
+/// The order below is the lifecycle order, and ENABLED is the ONLY state
+/// from which a source may be ingested. Everything else fails closed. The
+/// terminal states are last and they are terminal for different reasons:
+/// REJECTED is a decision about the source, BLOCKED_EXTERNAL_ACCESS is a
+/// statement about us - the adapter is finished and the door is shut.
+enum MarketSourceAccessState {
+  /// Known to exist. Nothing has been asked and nothing established.
+  DISCOVERED
+  /// Access asked for; no answer yet.
+  ACCESS_REQUESTED
+  /// The holder said yes. Not yet legally reviewed on our side.
+  ACCESS_GRANTED
+  /// Usable only with a credential we do not hold.
+  CREDENTIALS_REQUIRED
+  /// The credential exists in configuration. Says nothing about validity.
+  CREDENTIALS_CONFIGURED
+  /// Under our own licence/redistribution review.
+  LEGAL_REVIEW
+  /// The adapter is complete and tested and the source cannot be reached
+  /// on terms we may rely on. Technical completeness and live access are
+  /// different claims, and this is the state that keeps them apart.
+  BLOCKED_EXTERNAL_ACCESS
+  /// Everything cleared. The only ingestible state.
+  ENABLED
+  /// Turned off by us, for our own reasons rather than the holder's.
+  DISABLED
+  /// Assessed and refused. A decision, recorded so it is not reopened.
+  REJECTED
+  /// Access we once had and no longer do.
+  EXPIRED
+}
+
 /// On what basis we believe we may store and aggregate this source's data.
 ///
 /// UNADDRESSED_PUBLIC_ENDPOINT is the honest description of a documented,
@@ -744,6 +813,41 @@ model MarketSource {
   /// The best identity this source can support. Changing it is an adapter
   /// version bump, never a silent re-keying of existing rows.
   identityBasis MarketIdentityBasis @default(SOURCE_ID)
+
+  /// What kind of relationship this is. Phase 11, and source-neutral by
+  /// construction: there is one value per RELATIONSHIP, never one per
+  /// employer. Required, with no default, because a default would let a
+  /// source acquire a category nobody chose for it.
+  category MarketSourceCategory
+
+  /// Where the source stands in its access lifecycle, and the gate on
+  /// ingestion: only ENABLED may be walked.
+  ///
+  /// Defaults to DISCOVERED - the state that grants nothing - so a row
+  /// inserted by any path at all is unusable until somebody moves it.
+  accessState       MarketSourceAccessState @default(DISCOVERED)
+  /// Why the source is in that state. Internal, and never served: it
+  /// records partnership status, refusals and what was asked of whom.
+  accessNote        String?
+  accessReviewedAt  DateTime?
+
+  /// Whether this source needs a credential to be reached at all.
+  ///
+  /// A boolean, and deliberately nothing more. The KEY NAMES live in the
+  /// adapter's code and the VALUES live in the environment; neither
+  /// belongs in a row that a read path could select. Its only job is to
+  /// let source health say "no credential" and "credential missing" as
+  /// different sentences.
+  requiresCredentials Boolean @default(false)
+
+  /// The credit this source's permission obliges us to display, verbatim,
+  /// or null where none is required.
+  ///
+  /// The same field the dataset side has carried since Phase 8, on the
+  /// posting side at last. It is the ONE licence-adjacent string a reader
+  /// is shown: licenceNote beside it is our own reasoning and stays
+  /// internal.
+  attribution String?
 
   licenceBasis      MarketLicenceBasis
   /// What was actually read, and when. Without these,

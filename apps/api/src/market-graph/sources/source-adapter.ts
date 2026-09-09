@@ -1,4 +1,6 @@
 import type { ContactRedaction } from '../observations/redaction.js';
+import type { SourceAccessState, SourceCategory } from './source-access.js';
+import type { SourceCredentialRequirement } from './source-credentials.js';
 
 /*
  * The contract every market source adapter satisfies.
@@ -201,6 +203,35 @@ export interface SourceClient {
   readonly maxPagesPerScope: number;
 }
 
+/**
+ * A provider's published request ceiling, and what was read to find it.
+ *
+ * Phase 11, and required rather than optional for the same reason
+ * `contactRedaction` is: a required field makes adding a source a moment
+ * where somebody has to answer the question. `requestsPerMinute: null`
+ * means the provider PUBLISHES no limit - which is not permission to go
+ * fast, and the note is where that gets said.
+ */
+export type SourceRateLimit = {
+  readonly requestsPerMinute: number | null;
+  readonly note: string;
+};
+
+/**
+ * Where a source stands in its access lifecycle, declared in code.
+ *
+ * In code, under review, beside the adapter it governs - the same place
+ * the licence position has lived since Phase 8, and for the same reason:
+ * it is a fact about the source rather than about our schema. The stored
+ * row mirrors it, and the ingestion gate refuses when the two disagree.
+ */
+export type SourceAccessDeclaration = {
+  readonly state: SourceAccessState;
+  /** Internal. What was asked of whom, and what came back. Never served. */
+  readonly note: string;
+  readonly reviewedAt: Date;
+};
+
 /** Everything the pipeline needs to ingest one source. */
 export type SourceDescriptor = {
   slug: string;
@@ -209,10 +240,39 @@ export type SourceDescriptor = {
   client: SourceClient;
   /** Recorded on the run and fingerprinted, so a sample is reproducible. */
   queryParams: Record<string, unknown>;
+  /**
+   * What kind of relationship this is, never which company it is about.
+   * A vacancy at any employer reaching us through an ATS is an ATS
+   * posting; there is no value here that could be a company name.
+   */
+  category: SourceCategory;
+  access: SourceAccessDeclaration;
+  /**
+   * What this source needs configured to be reached at all, by variable
+   * NAME. `null` is a claim that it needs nothing, made deliberately.
+   */
+  credentials: SourceCredentialRequirement | null;
+  /**
+   * The credit this source's permission obliges us to display, verbatim,
+   * or null where none is required.
+   *
+   * Not a courtesy line. It is the text that has to reach a reader for the
+   * permission to hold, so it is carried the same way the datasets have
+   * carried theirs since Phase 8 rather than reconstructed at the edge.
+   */
+  attribution: string | null;
+  rateLimit: SourceRateLimit;
   licenceBasis: 'UNADDRESSED_PUBLIC_ENDPOINT' | 'EXPLICIT_GRANT' | 'CONTRACTED';
   licenceNote: string;
   licenceReviewedAt: Date;
-  /** Never defaulted. Enabling a source is a deliberate act. */
+  /**
+   * Never defaulted. Enabling a source is a deliberate act.
+   *
+   * It must agree with `access.state`: true exactly when the state is
+   * ENABLED. A registry test asserts it, and the database refuses the
+   * combination outright through a CHECK constraint, so the rule holds
+   * even against a hand-edited row.
+   */
   isEnabled: boolean;
   /** Whether derived aggregates from this source may be shown to users. */
   mayRedistributeDerived: boolean;

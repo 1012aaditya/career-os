@@ -9,6 +9,7 @@ import { MarketSearchProjectionService } from './search/market-search-projection
 import { MarketSignalService } from './signals/market-signal.service.js';
 import { MarketDatasetRegistry } from './datasets/dataset-registry.js';
 import { MarketDatasetService } from './datasets/market-dataset.service.js';
+import { MarketSourceHealthService } from './sources/market-source-health.service.js';
 import { MarketSourcePurgeService } from './sources/market-source-purge.service.js';
 import { MarketSourceRegistry } from './sources/source-registry.js';
 
@@ -26,6 +27,7 @@ import { MarketSourceRegistry } from './sources/source-registry.js';
  *   node dist/market-graph/market-graph.cli.js signals <source> <scope>...
  *   node dist/market-graph/market-graph.cli.js project
  *   node dist/market-graph/market-graph.cli.js sources
+ *   node dist/market-graph/market-graph.cli.js health  [source]
  *   node dist/market-graph/market-graph.cli.js purge   <source> --reason=<code> [--confirm]
  *
  * `purge` is a DRY RUN unless --confirm is passed. It is the only
@@ -71,11 +73,40 @@ async function main(): Promise<void> {
           '[source]',
           JSON.stringify({
             slug: descriptor.slug,
+            category: descriptor.category,
+            accessState: descriptor.access.state,
             licenceBasis: descriptor.licenceBasis,
+            isEnabled: descriptor.isEnabled,
             mayRedistributeDerived: descriptor.mayRedistributeDerived,
             identityBasis: descriptor.adapter.identityBasis,
+            /*
+             * Whether a credential is NEEDED, never whether one is set and
+             * never which. `health` answers the configured question, on a
+             * host where the answer means something.
+             */
+            requiresCredentials: descriptor.credentials !== null,
           }),
         );
+      }
+
+      return;
+    }
+
+    if (command === 'health') {
+      /*
+       * The operator report. Internal by construction: it names credential
+       * VARIABLES, quotes access notes and says which sources are refused
+       * and why, none of which belongs on the read API. It is here and
+       * nowhere else, which is the same decision `sync` and `purge` are.
+       */
+      const health = await app.get(MarketSourceHealthService).report();
+
+      for (const entry of health) {
+        if (sourceSlug !== undefined && entry.slug !== sourceSlug) {
+          continue;
+        }
+
+        console.log('[health]', JSON.stringify(entry));
       }
 
       return;
@@ -232,7 +263,7 @@ async function main(): Promise<void> {
       scopes.length === 0
     ) {
       console.error(
-        'usage: market-graph.cli.js <sync|signals> <source> <scope>... | sources | normalize | project | dataset [source|all] | sanitize-legacy | purge <source> --reason=<code> [--confirm]',
+        'usage: market-graph.cli.js <sync|signals> <source> <scope>... | sources | health [source] | normalize | project | dataset [source|all] | sanitize-legacy | purge <source> --reason=<code> [--confirm]',
       );
       process.exitCode = 1;
       return;

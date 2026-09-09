@@ -100,7 +100,7 @@ success rate**. Six assessed, none usable.
 | Recruitee | NOT_FEASIBLE | T&C §2.4: "An End-User that is not the Subscriber does not derive any rights". Anonymous access ends **10 Feb 2027** |
 | Lever | NOT_FEASIBLE | Only third-party sentence is a warning to customers: "These jobs may be scraped by third parties" |
 | Greenhouse | NOT_FEASIBLE | No terms of any kind exist for third parties |
-| Ashby, Workable | PARTNERSHIP_REQUIRED | Customer-bound ToS, but both run **consent-gated partner feeds** |
+| Ashby, Workable | PARTNERSHIP_REQUIRED | Customer-bound ToS, but both run **consent-gated partner feeds**. Phase 11 built the Ashby adapter and client in full against a live response shape, and left the source `BLOCKED_EXTERNAL_ACCESS` — see [phase-11-partner-access.md](./phase-11-partner-access.md) |
 
 **One argument kills the whole category regardless of individual terms:**
 none of these vendors owns the posting text. Their own contracts say so —

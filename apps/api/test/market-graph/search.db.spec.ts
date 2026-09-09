@@ -908,8 +908,24 @@ describe('heterogeneous data does not break a result', () => {
 
 describe('the detail page', () => {
   it('carries what a reader needs, and the link to apply', async () => {
+    /*
+     * Keyed on the posting, not on its title.
+     *
+     * `titleRaw: 'Backend Engineer', sourceSlug: 'alpha'` matches TWO
+     * fixture postings - `exact` and `uncovered` - and findFirst has no
+     * ordering, so which one came back was decided by Postgres's physical
+     * row order. That is stable for a table filled the same way every
+     * time and is not stable at all once the table has been truncated and
+     * refilled after different prior activity: adding a fourth file to
+     * this tier was enough to flip it, and the test then failed on the
+     * skills of a posting that legitimately has none.
+     *
+     * A latent ambiguity rather than a new bug, but a real one: the test
+     * has always been asserting against whichever of two postings the
+     * database happened to hand it.
+     */
     const document = await prisma.marketPostingSearchDocument.findFirstOrThrow({
-      where: { titleRaw: 'Backend Engineer', sourceSlug: 'alpha' },
+      where: { posting: { externalId: 'alpha:exact' } },
       select: { postingId: true },
     });
 
@@ -925,8 +941,24 @@ describe('the detail page', () => {
   });
 
   it('attributes the posting to its publisher, in a reader vocabulary', async () => {
+    /*
+     * Keyed on the posting, not on its title.
+     *
+     * `titleRaw: 'Backend Engineer', sourceSlug: 'alpha'` matches TWO
+     * fixture postings - `exact` and `uncovered` - and findFirst has no
+     * ordering, so which one came back was decided by Postgres's physical
+     * row order. That is stable for a table filled the same way every
+     * time and is not stable at all once the table has been truncated and
+     * refilled after different prior activity: adding a fourth file to
+     * this tier was enough to flip it, and the test then failed on the
+     * skills of a posting that legitimately has none.
+     *
+     * A latent ambiguity rather than a new bug, but a real one: the test
+     * has always been asserting against whichever of two postings the
+     * database happened to hand it.
+     */
     const document = await prisma.marketPostingSearchDocument.findFirstOrThrow({
-      where: { titleRaw: 'Backend Engineer', sourceSlug: 'alpha' },
+      where: { posting: { externalId: 'alpha:exact' } },
       select: { postingId: true },
     });
 
@@ -962,8 +994,9 @@ describe('the detail page', () => {
      * planted with a number in the exact form that survived ingestion in
      * the real corpus, and the served description must not contain it.
      */
+    /* The same disambiguation as above: two postings share this title. */
     const document = await prisma.marketPostingSearchDocument.findFirstOrThrow({
-      where: { titleRaw: 'Backend Engineer', sourceSlug: 'alpha' },
+      where: { posting: { externalId: 'alpha:exact' } },
       select: { postingId: true, versionId: true },
     });
 

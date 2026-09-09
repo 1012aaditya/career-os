@@ -18,9 +18,12 @@ import { MarketNormalizationService } from './normalization/market-normalization
 import { MarketSearchProjectionService } from './search/market-search-projection.service.js';
 import { MarketSearchService } from './search/market-search.service.js';
 import { MarketSignalService } from './signals/market-signal.service.js';
+import { AshbyClient } from './sources/ashby/ashby.client.js';
 import { GreenhouseClient } from './sources/greenhouse/greenhouse.client.js';
 import { JobTechClient } from './sources/jobtech/jobtech.client.js';
+import { MarketSourceHealthService } from './sources/market-source-health.service.js';
 import { MarketSourcePurgeService } from './sources/market-source-purge.service.js';
+import { MarketSourceCredentials } from './sources/source-credentials.js';
 import { MarketSourceRegistry } from './sources/source-registry.js';
 import { CanadaJobBankClient } from './sources/canada-job-bank/canada-job-bank.client.js';
 import { JobicyClient } from './sources/jobicy/jobicy.client.js';
@@ -60,6 +63,12 @@ import { UsaJobsHistoricClient } from './sources/usajobs-historic/usajobs-histor
     PrismaModule,
   ],
   providers: [
+    /*
+     * Registered before any client, because a client may take it. It reads
+     * configuration and holds nothing: no cache, no memoised value, and no
+     * credential on the instance.
+     */
+    MarketSourceCredentials,
     GreenhouseClient,
     JobTechClient,
     TeachingVacanciesClient,
@@ -67,6 +76,7 @@ import { UsaJobsHistoricClient } from './sources/usajobs-historic/usajobs-histor
     NavClient,
     JobicyClient,
     CanadaJobBankClient,
+    AshbyClient,
     MarketSourceRegistry,
     OnetDataset,
     NocDataset,
@@ -83,6 +93,7 @@ import { UsaJobsHistoricClient } from './sources/usajobs-historic/usajobs-histor
     MarketSignalService,
     MarketGraphService,
     MarketSourcePurgeService,
+    MarketSourceHealthService,
     /*
      * The projection builder and the search reader. Both live here rather
      * than in the HTTP module so the projection can be rebuilt from the
@@ -93,6 +104,8 @@ import { UsaJobsHistoricClient } from './sources/usajobs-historic/usajobs-histor
   ],
   exports: [
     MarketLegacySanitizerService,
+    MarketSourceHealthService,
+    MarketSourceCredentials,
     MarketDatasetRegistry,
     MarketDatasetService,
     MarketSourcePurgeService,

@@ -8,6 +8,7 @@ import {
   orderAndDedupe,
   postingContentHash,
 } from '../observations/posting-identity.js';
+import { AshbyAdapter } from './ashby/ashby.adapter.js';
 import { FakeShapeAdapter } from './fake-shape/fake-shape.adapter.js';
 import { GreenhouseAdapter } from './greenhouse/greenhouse.adapter.js';
 import { JobTechAdapter } from './jobtech/jobtech.adapter.js';
@@ -398,6 +399,63 @@ const ADAPTERS: Array<{
       items: [
         { id: 'b7', title: 'First', _feed_entry: { uuid: 'b7' } },
         { id: 'b7', title: 'Second', _feed_entry: { uuid: 'b7' } },
+      ],
+    },
+  },
+  {
+    /*
+     * Phase 11's partner-shaped source. Structurally the closest thing
+     * here to the first ATS adapter - one board per scope, no pagination -
+     * and different in the two ways that matter: a uuid rather than a
+     * numeric id, so it is the first source whose key would be REJECTED by
+     * the numeric validator, and no employer field at all, so the board
+     * token is the only employer statement the source makes.
+     */
+    name: 'ashby',
+    make: () => new AshbyAdapter(),
+    page: {
+      apiVersion: 1,
+      jobs: [
+        {
+          id: 'b7458d4e-da2e-47bd-98cb-adfda43d42b2',
+          title: 'Senior Backend Engineer',
+          department: 'Engineering',
+          team: 'Platform',
+          employmentType: 'FullTime',
+          location: 'Remote - European Union',
+          isListed: true,
+          isRemote: true,
+          workplaceType: 'Remote',
+          publishedAt: '2026-03-04T14:29:08.532+00:00',
+          jobUrl: 'https://example.invalid/acme/b7458d4e',
+          applyUrl: 'https://example.invalid/acme/b7458d4e/application',
+          descriptionHtml: '<p>We use Postgres and Kubernetes.</p>',
+          descriptionPlain: 'We use Postgres and Kubernetes.',
+          secondaryLocations: [{ location: 'Berlin' }, { location: 'Madrid' }],
+        },
+        {
+          id: 'a1111111-da2e-47bd-98cb-adfda43d42b2',
+          title: 'Frontend Engineer',
+          department: 'Engineering',
+          location: 'London',
+          isListed: true,
+          publishedAt: '2026-01-15T09:00:00.000+00:00',
+          jobUrl: 'https://example.invalid/acme/a1111111',
+          applyUrl: 'https://example.invalid/acme/a1111111/application',
+          descriptionHtml: '<p>React.</p>',
+        },
+      ],
+    },
+    pageWithNull: {
+      jobs: [null, { id: 'c1', title: 'Data Engineer' }],
+    },
+    pageMissingTitle: {
+      jobs: [{ id: 'd1' }, { id: 'd2', title: 'QA Engineer' }],
+    },
+    pageWithDuplicate: {
+      jobs: [
+        { id: 'e7', title: 'First' },
+        { id: 'e7', title: 'Second' },
       ],
     },
   },

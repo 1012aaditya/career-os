@@ -35,12 +35,45 @@
  * hash preimage, so a change lands as a labelled split - old rows keep
  * their old contentHashVersion - rather than as a phantom edit to every
  * posting ever ingested.
+ *
+ * Bumped to 2 by Phase 11, together with CONTENT_HASH_VERSION, when
+ * credential-shaped URL parameters were added to what is removed. No
+ * source in the corpus emits one, so the rule changes no existing byte -
+ * but the hash commits to the RULE and not to its effect, so the bump is
+ * what keeps that commitment true. The cost is stated rather than
+ * discovered: the next walk of each source mints one new version per
+ * posting at contentHashVersion 3, which is a labelled split and not a
+ * phantom edit, and every version already stored keeps saying exactly what
+ * it said.
  */
-export const REDACTION_VERSION = 1;
+export const REDACTION_VERSION = 2;
 
 /** Fixed sentinels. Never the empty string. */
 const EMAIL_SENTINEL = '[redacted:email]';
 const PHONE_SENTINEL = '[redacted:phone]';
+/*
+ * Substituted for a credential-shaped parameter's VALUE, leaving the
+ * parameter itself in place. A removed parameter would make the URL look
+ * like one that never carried a token; a blanked one says a token was
+ * there and is gone, which is the difference between a redaction and a
+ * quiet rewrite.
+ */
+const CREDENTIAL_SENTINEL = 'redacted';
+
+/*
+ * Query parameters whose VALUE is a credential.
+ *
+ * The same vocabulary the source registry already refuses in queryParams,
+ * kept deliberately in step with it: those two lists disagreeing would
+ * mean a key banned from one storage path was accepted on another.
+ *
+ * Matched on the whole parameter NAME, case-insensitively, with word
+ * boundaries so `sig` does not swallow `design` and `key` does not swallow
+ * `keyword` or `monkeypox`. Anchored rather than substring-matched because
+ * a false positive here silently breaks a working apply link.
+ */
+const CREDENTIAL_PARAMETER =
+  /^(?:[a-z0-9]+[_-])?(?:api[_-]?key|key|token|access[_-]?token|refresh[_-]?token|secret|client[_-]?secret|password|passwd|pwd|auth|authorization|bearer|credential|signature|sig|sso|session|jwt)(?:[_-][a-z0-9]+)?$/i;
 
 /*
  * An email address, deliberately narrower than RFC 5322.
@@ -126,6 +159,86 @@ export function redactContactText(
   return out;
 }
 
+/**
+ * A URL with the values of credential-shaped query parameters blanked.
+ *
+ * Phase 11. Nothing in the corpus needs it yet, and that is the point of
+ * adding it before the source that will: a partner feed commonly hands out
+ * per-employer apply links carrying a signed token, and the apply URL is
+ * the one string this pipeline had DELIBERATELY exempted from redaction -
+ * on the reasoning that a link to a page is not a way to reach a person.
+ * That reasoning is still right about people and was never about secrets.
+ *
+ * Pure and total. Anything that is not a parseable absolute URL is
+ * returned unchanged rather than mangled: a value that is not a URL cannot
+ * have a query string, and guessing at one with a regex is how a
+ * legitimate description gets shredded.
+ *
+ * Fragments are handled too, because an OAuth-style implicit token lives
+ * after the `#` where a query parser will never look.
+ */
+export function redactUrlCredentials(value: string): string {
+  let url: URL;
+
+  try {
+    url = new URL(value);
+  } catch {
+    /*
+     * Not a URL. Deliberately returned untouched: this function's only job
+     * is query parameters, and a relative path, a sentence or a fragment
+     * of HTML has none.
+     */
+    return value;
+  }
+
+  let changed = false;
+
+  /*
+   * A snapshot of the keys, and the spread is load-bearing: the loop
+   * MUTATES the same URLSearchParams it is walking, and a live iterator
+   * over a collection being written to is undefined behaviour waiting to
+   * be discovered by a URL with two credential parameters in it. The
+   * linter reads this as a redundant copy; it is not.
+   */
+  const queryKeys = [...url.searchParams.keys()];
+
+  for (const key of queryKeys) {
+    if (CREDENTIAL_PARAMETER.test(key)) {
+      url.searchParams.set(key, CREDENTIAL_SENTINEL);
+      changed = true;
+    }
+  }
+
+  if (url.hash.length > 1) {
+    const fragment = new URLSearchParams(url.hash.slice(1));
+    let fragmentChanged = false;
+
+    /* A snapshot, for the same reason as above: this loop writes. */
+    const fragmentKeys = [...fragment.keys()];
+
+    for (const key of fragmentKeys) {
+      if (CREDENTIAL_PARAMETER.test(key)) {
+        fragment.set(key, CREDENTIAL_SENTINEL);
+        fragmentChanged = true;
+      }
+    }
+
+    if (fragmentChanged) {
+      url.hash = `#${fragment.toString()}`;
+      changed = true;
+    }
+  }
+
+  /*
+   * The original string when nothing matched, not `url.toString()`.
+   * Round-tripping through URL normalises percent-encoding, the default
+   * port and a missing trailing slash - which would silently rewrite every
+   * apply URL in the corpus and change every content hash for a reason
+   * that has nothing to do with redaction.
+   */
+  return changed ? url.toString() : value;
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -182,7 +295,14 @@ export function redactPayload(
 
 function scrubStrings(value: unknown, redaction: ContactRedaction): unknown {
   if (typeof value === 'string') {
-    return redactContactText(value, redaction);
+    /*
+     * Both, and in this order. A signed apply link can carry a recruiter's
+     * address in one parameter and a token in another, and each pass is a
+     * no-op on what the other removes.
+     */
+    return redactUrlCredentials(
+      redactContactText(value, redaction) ?? value,
+    );
   }
 
   if (Array.isArray(value)) {
@@ -235,12 +355,23 @@ export function redactRecord<
     locationRaw: redactContactText(record.locationRaw, redaction),
     descriptionRaw: redactContactText(record.descriptionRaw, redaction),
     /*
-     * The apply URL is left alone. It is a link to a page, not a way to
-     * reach a person - no address appears in either source's apply URLs -
-     * and running an email pattern over a query string would mangle
-     * legitimate parameters.
+     * The apply URL keeps its contact-pattern exemption and loses its
+     * exemption from CREDENTIALS.
+     *
+     * The original reasoning still holds for people: it is a link to a
+     * page, no address appears in any source's apply URLs, and running an
+     * email pattern over a query string would mangle legitimate
+     * parameters. It never held for secrets. A partner feed that hands out
+     * per-employer apply links with a signed token in the query string
+     * would otherwise write that token into a version row, a search
+     * document and an API response - which is exactly the leak the
+     * credential rules exist to prevent, arriving through the one field
+     * nobody was scanning.
      */
-    applyUrlRaw: record.applyUrlRaw,
+    applyUrlRaw:
+      record.applyUrlRaw === null
+        ? null
+        : redactUrlCredentials(record.applyUrlRaw),
     payload: redactPayload(record.payload, redaction),
   };
 }

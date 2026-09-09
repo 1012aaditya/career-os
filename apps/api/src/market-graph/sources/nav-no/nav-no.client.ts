@@ -1,5 +1,9 @@
 import { Injectable, Optional } from '@nestjs/common';
 
+import {
+  MarketSourceCredentials,
+  type SourceCredentialRequirement,
+} from '../source-credentials.js';
 import type { SourceClient, SourcePage } from '../source-adapter.js';
 
 /*
@@ -95,11 +99,33 @@ function retryAfterMs(header: string | null): number | null {
   return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1_000 : null;
 }
 
+/**
+ * The operator override, by NAME.
+ *
+ * OPTIONAL, which is why it is not on the descriptor: without it this
+ * client fetches NAV's own public token, so an unset variable is the
+ * normal case rather than a misconfiguration. Declaring it as a
+ * requirement would make the gate refuse a source that works fine.
+ */
+export const NAV_CREDENTIALS: SourceCredentialRequirement = {
+  envKeys: ['MARKET_NAV_TOKEN'],
+};
+
 @Injectable()
 export class NavClient implements SourceClient {
-  private token: string | null = null;
+  /**
+   * The PUBLIC token, cached for the life of the process.
+   *
+   * Only ever the public one. An operator-supplied token is re-read from
+   * configuration on each use and never stored here - a client holding a
+   * secret is one console.log away from a log file full of them, and
+   * caching buys nothing when the read is an object lookup.
+   */
+  private publicToken: string | null = null;
 
   constructor(
+    @Optional()
+    private readonly credentials: MarketSourceCredentials = new MarketSourceCredentials(),
     @Optional()
     private readonly sleep: Sleep = (ms) =>
       new Promise((resolve) => setTimeout(resolve, ms)),
@@ -121,16 +147,19 @@ export class NavClient implements SourceClient {
    * transient network one.
    */
   private async bearerToken(scope: string): Promise<string> {
-    if (this.token !== null) {
-      return this.token;
+    /*
+     * Configuration first, and read through the one service that reads
+     * configuration. This used to reach into process.env directly and
+     * cache the result on the instance, which was a second credential
+     * path beside the shared one - the exact duplication Phase 11's
+     * boundary scan now refuses.
+     */
+    if (this.credentials.state(NAV_CREDENTIALS).kind === 'CONFIGURED') {
+      return this.credentials.resolve(NAV_CREDENTIALS).MARKET_NAV_TOKEN.trim();
     }
 
-    const configured = process.env.MARKET_NAV_TOKEN;
-
-    if (configured !== undefined && configured.trim() !== '') {
-      this.token = configured.trim();
-
-      return this.token;
+    if (this.publicToken !== null) {
+      return this.publicToken;
     }
 
     let response: Response;
@@ -160,9 +189,9 @@ export class NavClient implements SourceClient {
       throw new NavRequestError(scope, response.status, 'missing_credential');
     }
 
-    this.token = match[0];
+    this.publicToken = match[0];
 
-    return this.token;
+    return this.publicToken;
   }
 
   async fetchScope(scope: string, cursor: string | null): Promise<SourcePage> {

@@ -23,6 +23,8 @@ import {
   type RunStats,
   type ScopeCoverage,
 } from './market-ingestion-run.service.js';
+import { evaluateIngestGate } from '../sources/source-access.js';
+import { MarketSourceCredentials } from '../sources/source-credentials.js';
 import { MarketVocabularyService } from './market-vocabulary.service.js';
 
 /*
@@ -125,6 +127,7 @@ export class MarketIngestionService {
     private readonly prisma: PrismaService,
     private readonly runs: MarketIngestionRunService,
     private readonly vocabulary: MarketVocabularyService,
+    private readonly credentials: MarketSourceCredentials,
   ) {}
 
   /**
@@ -147,14 +150,38 @@ export class MarketIngestionService {
     const source = await this.vocabulary.ensureSource(input.source);
 
     /*
-     * A disabled source is not ingested, and the refusal is loud. Without
-     * this check isEnabled would be a comment: a column recording an
-     * intention that no code path consulted, which is worse than not
-     * having it, because a reader would believe it was doing something.
+     * THE GATE. Nothing above this line has touched a network and nothing
+     * below it runs unless this passes.
+     *
+     * It replaces a single `if (!source.isEnabled)`, which was a real
+     * check on the wrong thing. isEnabled answered "is the switch on" and
+     * nothing answered "was this source ever cleared" - so a row whose
+     * switch had been left on from before a licence review changed its
+     * mind was, to that check, indistinguishable from an approved source.
+     * That was the live state of this database for Greenhouse and NAV.
+     *
+     * Four refusals, and each is a different thing to go and fix:
+     *   access_not_enabled          nobody cleared this source
+     *   access_state_disagreement   code and row disagree; neither wins
+     *   source_disabled             cleared, switched off by an operator
+     *   credentials_missing         cleared, not configured on this host
+     *
+     * The last one matters more than it looks. Without it a source that
+     * needs a key it does not have would send an unauthenticated request,
+     * read the provider's 401, and record a provider failure - sending
+     * somebody to check the provider's status page for a variable that
+     * was never set on this machine.
      */
-    if (!source.isEnabled) {
+    const gate = evaluateIngestGate({
+      declared: input.source.access.state,
+      stored: source.accessState,
+      storedIsEnabled: source.isEnabled,
+      credentials: this.credentials.state(input.source.credentials),
+    });
+
+    if (!gate.permitted) {
       throw new ConflictException(
-        `Market source ${source.slug} is not enabled`,
+        `Market source ${source.slug} refused: ${gate.reason} (${gate.detail})`,
       );
     }
 

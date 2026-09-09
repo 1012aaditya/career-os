@@ -108,6 +108,14 @@ export class MarketFixture {
         slug,
         displayName: slug,
         licenceBasis: 'EXPLICIT_GRANT',
+        /*
+         * Phase 11 columns. A fixture source stands in for a cleared
+         * open-data publisher, which is what every existing test means by
+         * "a source" - and the CHECK constraint would refuse the row
+         * anyway if it were enabled from any other access state.
+         */
+        category: 'PUBLIC_OPEN_DATA',
+        accessState: 'ENABLED',
         isEnabled: true,
         mayRedistributeDerived: true,
         pollIntervalHours: over.pollIntervalHours ?? 24,

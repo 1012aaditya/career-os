@@ -1,5 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 
+import { AshbyAdapter } from './ashby/ashby.adapter.js';
+import { AshbyClient, ASHBY_CREDENTIALS } from './ashby/ashby.client.js';
 import { CanadaJobBankAdapter } from './canada-job-bank/canada-job-bank.adapter.js';
 import { CanadaJobBankClient } from './canada-job-bank/canada-job-bank.client.js';
 import { GreenhouseAdapter } from './greenhouse/greenhouse.adapter.js';
@@ -43,6 +45,7 @@ export class MarketSourceRegistry {
     private readonly nav: NavClient,
     private readonly jobicy: JobicyClient,
     private readonly canada: CanadaJobBankClient,
+    private readonly ashby: AshbyClient,
   ) {}
 
   descriptors(): SourceDescriptor[] {
@@ -54,6 +57,7 @@ export class MarketSourceRegistry {
       this.navSource(),
       this.jobicySource(),
       this.canadaJobBankSource(),
+      this.ashbySource(),
     ];
   }
 
@@ -76,6 +80,28 @@ export class MarketSourceRegistry {
       adapter: new GreenhouseAdapter(),
       client: this.greenhouse,
       queryParams: { contentIncluded: true },
+      category: 'ATS',
+      access: {
+        /*
+         * Assessed and refused, which is a decision rather than a delay.
+         * No terms of service govern the public Job Board API in either
+         * direction - and the argument that settles it is not about terms
+         * at all: the ATS vendor does not own the posting text. Greenhouse
+         * hosts what its customers wrote, so vendor access could never be
+         * a copyright licence even if it were offered. Recorded as
+         * REJECTED so the endpoint answering is not mistaken for the
+         * question being open.
+         */
+        state: 'REJECTED',
+        note: 'Assessed 2026-09-08 and refused. No third-party terms exist in either direction, and the posting text belongs to the employer rather than to the ATS vendor - so vendor-side access would not be a copyright licence. Reopening this needs an employer-side or partner-side grant, not another look at the endpoint.',
+        reviewedAt: new Date('2026-09-08T00:00:00.000Z'),
+      },
+      credentials: null,
+      attribution: null,
+      rateLimit: {
+        requestsPerMinute: null,
+        note: 'None published. Twenty rapid sequential requests were not throttled on 2026-09-08, which is an observation and not a promise; the client waits 250ms between boards regardless.',
+      },
       /*
        * Not a grant. No terms of service governing the public Job Board API
        * were found; the endpoint is documented as public, unauthenticated
@@ -123,6 +149,24 @@ export class MarketSourceRegistry {
       adapter: new JobTechAdapter(),
       client: this.jobtech,
       queryParams: { sort: 'pubdate-desc', pageSize: 100, offsetCap: 2000 },
+      category: 'PUBLIC_OPEN_DATA',
+      access: {
+        state: 'ENABLED',
+        note: 'Open public API, no registration, no credential. The CC0 dedication is published in the API swagger.json and in the Arbetsformedlingen open-data catalogue; nothing was requested of anybody because nothing needed to be.',
+        reviewedAt: new Date('2026-09-08T00:00:00.000Z'),
+      },
+      credentials: null,
+      /*
+       * Null, and it is the only source here where null means "the licence
+       * says so" rather than "we did not find one". CC0 waives attribution
+       * expressly, and inventing a credit line would misstate the licence
+       * in the direction of looking diligent.
+       */
+      attribution: null,
+      rateLimit: {
+        requestsPerMinute: null,
+        note: 'None published for the search API. The offset cap of 2000 in queryParams is the provider\'s own documented ceiling on deep paging, not a rate limit.',
+      },
       /*
        * The only affirmative licence found across every source surveyed.
        * CC0 is a public-domain dedication: commercial use, durable storage
@@ -151,6 +195,19 @@ export class MarketSourceRegistry {
       adapter: new TeachingVacanciesAdapter(),
       client: this.teachingVacancies,
       queryParams: { pageSize: 100 },
+      category: 'PUBLIC_OPEN_DATA',
+      access: {
+        state: 'ENABLED',
+        note: 'Open API published by the UK Department for Education. No registration and no credential; the licence is declared in the response envelope itself.',
+        reviewedAt: new Date('2026-09-08T00:00:00.000Z'),
+      },
+      credentials: null,
+      attribution:
+        'Contains public sector information licensed under the Open Government Licence v3.0.',
+      rateLimit: {
+        requestsPerMinute: null,
+        note: 'None published. Pages are 100 vacancies and the whole service is ~3.6k live vacancies, so a complete walk is under 40 requests.',
+      },
       /*
        * An affirmative grant, and unusually it is machine-readable: every
        * response envelope carries
@@ -184,6 +241,26 @@ export class MarketSourceRegistry {
       adapter: new UsaJobsHistoricAdapter(),
       client: this.usajobs,
       queryParams: { pageSize: 500 },
+      category: 'PUBLIC_OPEN_DATA',
+      access: {
+        state: 'ENABLED',
+        /*
+         * The access position depends on NOT holding a credential, which
+         * inverts the usual direction of this field and is the reason it
+         * is spelled out here as well as in the licence note. Registering
+         * for the Search API would bind us to terms forbidding derivative
+         * works; this endpoint needs no registration and is documented as
+         * publicly consumable.
+         */
+        note: 'Unauthenticated by design. The Historic JOA endpoint is documented as requiring no authorization; the separate Search API is reachable only by registering, and registration binds the caller to terms whose section 2 forbids creating derivative works. Obtaining a key here would REMOVE our right to use the data, so no key is to be requested.',
+        reviewedAt: new Date('2026-09-08T00:00:00.000Z'),
+      },
+      credentials: null,
+      attribution: 'Source: USAJOBS, U.S. Office of Personnel Management.',
+      rateLimit: {
+        requestsPerMinute: null,
+        note: 'None published for the unauthenticated historic endpoint. Pages are 500 records and the client walks by continuation token.',
+      },
       /*
        * An affirmative statement on a live primary page, and it is
        * available only because we do NOT register for a key.
@@ -212,6 +289,26 @@ export class MarketSourceRegistry {
       adapter: new NavAdapter(),
       client: this.nav,
       queryParams: { pageSize: 100 },
+      category: 'PUBLIC_OPEN_DATA',
+      access: {
+        /*
+         * DISABLED, and the distinction from REJECTED is the whole reason
+         * the state exists. Nothing about this source was refused - its
+         * terms name statistical use explicitly and are among the best
+         * found anywhere. The blocker is ours: the feed is append-only
+         * from 2019 and needs a cursor persisted across runs, which the
+         * ingestion model does not have.
+         */
+        state: 'DISABLED',
+        note: 'Access granted and unused. Blocked by our own ingestion model, which starts every run from a null cursor and so re-reads an append-only feed from 2019 - a live 20-page walk returned 20,000 records, all INACTIVE, which NAV\'s terms forbid retaining. Re-enable when cursor persistence exists, not before.',
+        reviewedAt: new Date('2026-09-08T00:00:00.000Z'),
+      },
+      credentials: null,
+      attribution: 'Data from NAV (Arbeidsplassen), Norway.',
+      rateLimit: {
+        requestsPerMinute: null,
+        note: 'None published. Not exercised: the source is disabled for an ingestion-model reason before any pacing question arises.',
+      },
       /*
        * The only source surveyed whose terms name statistical use in so
        * many words. Note the trap: NAV's OpenAPI declares an MIT licence,
@@ -259,6 +356,24 @@ export class MarketSourceRegistry {
       adapter: new JobicyAdapter(),
       client: this.jobicy,
       queryParams: { count: 200 },
+      /*
+       * LICENSED_AGGREGATOR rather than PUBLIC_OPEN_DATA, and the
+       * difference is that this grant was made to reusers rather than to
+       * the world - so it can be withdrawn, and a category that said
+       * "open data" would suggest otherwise.
+       */
+      category: 'LICENSED_AGGREGATOR',
+      access: {
+        state: 'ENABLED',
+        note: 'Published syndication terms grant reuse without individual permission. No application and no credential. One obligation is an OPERATOR obligation this code cannot enforce: polling is limited to once per hour, which is a scheduling decision outside the pipeline.',
+        reviewedAt: new Date('2026-09-08T00:00:00.000Z'),
+      },
+      credentials: null,
+      attribution: 'Job listings provided by Jobicy.',
+      rateLimit: {
+        requestsPerMinute: 1,
+        note: 'The syndication terms limit polling to once per hour. Expressed here as the provider\'s stated ceiling; the pipeline does not schedule itself, so honouring it is an operator obligation and is recorded as one.',
+      },
       licenceBasis: 'EXPLICIT_GRANT',
       licenceNote:
         'Jobicy syndication terms grant reuse without individual permission: "You may use Jobicy listings in your own products and user experiences without requesting individual permission... You may create your own interfaces, summaries, categories, search experiences, and additional context around listings." Attribution and canonical URL retention required; polling limited to once per hour, which is an operator scheduling obligation this code does not enforce. Verified live 2026-09-08. Coverage limitation, and it is severe: the API serves a rolling window of the most recent listings with NO pagination, so a scope reads as complete because the source served everything it will serve - which is not the same as having read the market. Treat as a signal source, never a census.',
@@ -275,6 +390,19 @@ export class MarketSourceRegistry {
       adapter: new CanadaJobBankAdapter(),
       client: this.canada,
       queryParams: { fileEncoding: 'utf-16le', separator: 'tab' },
+      category: 'PUBLIC_OPEN_DATA',
+      access: {
+        state: 'ENABLED',
+        note: 'Open bulk file published through the open.canada.ca CKAN catalogue. No registration and no credential; the licence id is machine-readable in the package metadata.',
+        reviewedAt: new Date('2026-09-08T00:00:00.000Z'),
+      },
+      credentials: null,
+      attribution:
+        'Contains information licensed under the Open Government Licence - Canada.',
+      rateLimit: {
+        requestsPerMinute: null,
+        note: 'None published. One monthly file per walk, so the question barely arises.',
+      },
       /*
        * The licence is machine-readable in the publisher's own catalogue:
        * CKAN returns "license_id": "ca-ogl-lgo". OGL - Canada grants use
@@ -290,4 +418,90 @@ export class MarketSourceRegistry {
       mayRedistributeDerived: true,
     };
   }
+
+  /*
+   * Phase 11's first partner-shaped source, and the honest outcome of it.
+   *
+   * TECHNICALLY COMPLETE, EXTERNALLY BLOCKED. The adapter parses the real
+   * payload, the client handles the real failure modes, both are covered
+   * by the same contract tests every other source passes, and the source
+   * ingests nothing - because the right to ingest it has not been
+   * established and technical availability is not permission.
+   *
+   * WHY THIS PROVIDER AND NOT THE FIRST ON THE LIST. Phase 11 names iCIMS,
+   * then Oracle Recruiting, then Ashby. Neither of the first two can be
+   * built faithfully from here: both are reached only through an executed
+   * partner agreement with issued credentials, and their payload shapes
+   * are behind that agreement - so an adapter for either would be an
+   * adapter for a shape somebody imagined, tested against fixtures the
+   * same person invented. That is not an integration; it is a drawing of
+   * one. Ashby was chosen because this project's own source roadmap had
+   * already identified Ashby and Workable as the ONLY ATS route that is
+   * not a dead end, for a reason that is about ownership rather than about
+   * terms: their partner feeds are consent-gated, and the consenting party
+   * is the EMPLOYER - which is the missing authority, because the employer
+   * is who owns the posting text.
+   *
+   * WHAT IS ACTUALLY BLOCKED. Not the endpoint. The public job board API
+   * answers unauthenticated, and its shape was read from one live response
+   * on 2026-09-09 to write the adapter against something real. What is
+   * blocked is the PARTNER feed, whose terms are not public and whose
+   * access is a business-development conversation, not an engineering
+   * task. Ingesting the public endpoint instead would be helping ourselves
+   * to employers' text on the grounds that a vendor left a door open,
+   * which is the exact reasoning Part U forbids.
+   */
+  private ashbySource(): SourceDescriptor {
+    return {
+      slug: 'ashby',
+      displayName: 'Ashby (ATS job boards)',
+      adapter: new AshbyAdapter(),
+      client: this.ashby,
+      queryParams: { boardPerScope: true },
+      category: 'ATS',
+      access: {
+        state: 'BLOCKED_EXTERNAL_ACCESS',
+        note: 'Adapter and client complete and tested against a live response shape read on 2026-09-09 (70 postings, apiVersion 1). NOT ingesting. The public posting API is unauthenticated, and that is not a grant: Ashby hosts text its customers own, so vendor-side availability cannot license employer-owned content. The route that would license it is Ashby\'s consent-gated partner feed, where the employer agrees to syndication - terms not public, access not requested and not held, and obtaining it is business development rather than engineering. Move to ACCESS_REQUESTED when an approach is actually made; nothing here may reach ENABLED without partner terms in hand.',
+        reviewedAt: new Date('2026-09-09T00:00:00.000Z'),
+      },
+      /*
+       * Declared by NAME, and inert. The public endpoint needs nothing, so
+       * an unset ASHBY_API_KEY is not a misconfiguration - it is the
+       * normal state. The requirement is carried anyway so that the day
+       * partner access exists, the credential path is one that has been
+       * tested rather than one written in a hurry.
+       */
+      credentials: ASHBY_CREDENTIALS,
+      /*
+       * Null because no permission has been established, so no permission
+       * has told us what it obliges. It is not "no attribution required" -
+       * it is a question that has not been asked of anybody, and a credit
+       * line invented here would imply a relationship that does not exist.
+       */
+      attribution: null,
+      rateLimit: {
+        requestsPerMinute: 60,
+        note: 'None published for the posting API. 60/min is OUR ceiling, not theirs: the client enforces a one-second minimum interval between requests and a one-second delay between boards. A self-imposed limit on an ungranted endpoint, which is the only defensible setting for one.',
+      },
+      /*
+       * Unresolved, and REJECTED would be wrong. Greenhouse's position was
+       * assessed and refused; this one has a real route that nobody has
+       * walked yet. The basis stays UNADDRESSED_PUBLIC_ENDPOINT because
+       * that is precisely what the public endpoint is - available, and
+       * governed by nothing that speaks to us.
+       */
+      licenceBasis: 'UNADDRESSED_PUBLIC_ENDPOINT',
+      licenceNote:
+        'No terms governing third-party reuse of the public job board API were found on 2026-09-09. The endpoint is unauthenticated and documented for embedding a customer\'s OWN board, which is a different act from aggregating many. The decisive point is ownership rather than terms: Ashby\'s customer agreement leaves the customer holding rights in its content, so Ashby cannot license the posting text to us and an open endpoint does not either. PII: no structured contact fields across the eighteen keys observed, but bodies are hiring-manager prose and the live sample opened with a named manager and a personal LinkedIn URL - the universal email and phone patterns apply, and names in prose remain the pipeline-wide stated residual.',
+      licenceReviewedAt: new Date('2026-09-09T00:00:00.000Z'),
+      /*
+       * False, and the CHECK constraint on MarketSource now makes it
+       * impossible for this to be true while the access state is anything
+       * but ENABLED - so this cannot drift the way Greenhouse's row did.
+       */
+      isEnabled: false,
+      mayRedistributeDerived: false,
+    };
+  }
+
 }

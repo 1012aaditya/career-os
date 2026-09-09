@@ -901,7 +901,25 @@ export class MarketSearchService {
           slug: true,
           displayName: true,
           licenceBasis: true,
-          licenceNote: true,
+          /*
+           * `attribution`, and NOT `licenceNote`. Phase 11 swapped them
+           * and the difference is not cosmetic.
+           *
+           * licenceNote is our own working reasoning: it names what was
+           * verified and when, records residual privacy risks, quotes
+           * clauses, and in one case explains which of a publisher's two
+           * APIs must never be called. It was being served to every reader
+           * of every job detail, which is internal operational material
+           * leaving the building for no reason - the mobile client never
+           * even rendered it.
+           *
+           * attribution is the opposite kind of string: the credit a
+           * licence OBLIGES us to display, written to be displayed. It is
+           * the same field the dataset side has carried since Phase 8, so
+           * this is the existing attribution mechanism reaching the
+           * posting side rather than a second one.
+           */
+          attribution: true,
         },
       }),
       document.roleSlug === null
@@ -961,7 +979,13 @@ export class MarketSearchService {
                   slug: sourceDetail.slug,
                   displayName: sourceDetail.displayName,
                   licenceBasis: sourceDetail.licenceBasis,
-                  licenceNote: sourceDetail.licenceNote,
+                  /*
+                   * Null where the licence requires none - CC0 waives it
+                   * expressly - and a real sentence where one does. Never
+                   * an empty string, which would render as a blank line
+                   * under a heading.
+                   */
+                  attribution: sourceDetail.attribution,
                 },
           firstObservedAt: document.firstSeenAt.toISOString(),
           lastObservedAt: document.lastSeenAt.toISOString(),

@@ -121,7 +121,17 @@ export type MarketPostingDetail = {
       slug: string;
       displayName: string;
       licenceBasis: string;
-      licenceNote: string | null;
+      /*
+       * The credit this source's permission obliges us to display, or
+       * null where none is required.
+       *
+       * This field used to be `licenceNote`, which was our own internal
+       * reasoning about a licence and was never rendered. Phase 11
+       * replaced it with the string a licence actually asks for - and the
+       * screen now shows it, because several of these sources are used
+       * under licences whose only condition is that the credit appears.
+       */
+      attribution: string | null;
     } | null;
     firstObservedAt: string;
     lastObservedAt: string;

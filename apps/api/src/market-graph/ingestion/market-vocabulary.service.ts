@@ -5,6 +5,7 @@ import type {
   IdentityBasis,
   SourceDescriptor,
 } from '../sources/source-adapter.js';
+import type { SourceAccessState } from '../sources/source-access.js';
 import {
   ROLE_ALIASES,
   ROLES,
@@ -70,6 +71,21 @@ export class MarketVocabularyService {
         slug: descriptor.slug,
         displayName: descriptor.displayName,
         kind: 'SKILL_TAXONOMY',
+        /*
+         * A published dataset is an open release by its publisher, which
+         * is what PUBLIC_OPEN_DATA means. Every dataset in the registry is
+         * a government or public-body file under a stated licence.
+         */
+        category: 'PUBLIC_OPEN_DATA',
+        /*
+         * Datasets are bulk files behind no gate and no credential, and
+         * every one of them carries an affirmative licence - so the
+         * lifecycle that exists for negotiated access has nothing to
+         * negotiate here. ENABLED where the descriptor says enabled, and
+         * DISABLED rather than a half-state where it does not.
+         */
+        accessState: descriptor.isEnabled ? 'ENABLED' : 'DISABLED',
+        requiresCredentials: false,
         identityBasis: 'SOURCE_ID',
         licenceBasis: descriptor.licenceBasis,
         licenceNote: descriptor.licenceNote,
@@ -85,38 +101,88 @@ export class MarketVocabularyService {
     id: string;
     slug: string;
     isEnabled: boolean;
+    accessState: SourceAccessState;
     identityBasis: IdentityBasis;
   }> {
+    const enabledByAccess = descriptor.access.state === 'ENABLED';
+
     return this.prisma.marketSource.upsert({
       where: { slug: descriptor.slug },
       /*
-       * update is empty on purpose. Operational columns - isEnabled, the
-       * expected posting lifetime, the poll interval - are meant to be
+       * The update block used to be empty, and Phase 11 splits the reason
+       * it was empty from the thing that reason was protecting.
+       *
+       * The original argument still stands for OPERATIONAL columns.
+       * isEnabled, expectedPostingLifetimeDays and pollIntervalHours are
        * tuned in the database from real observation, and a deploy that
        * reset them to the code's declaration would silently undo that
-       * tuning every time the process restarted.
+       * tuning on every restart. They stay untouched.
+       *
+       * It never stood for REVIEW columns. The access state, the category,
+       * the attribution obligation and the licence position are decided in
+       * code, in review, under version control - and leaving them out of
+       * the update meant a decision could be taken, merged, and never
+       * reach the row. That was live rather than hypothetical: two
+       * descriptors moved to `isEnabled: false` and neither row changed,
+       * because rows are not created twice, so this database held an
+       * enabled Greenhouse for as long as anybody cared to look.
+       *
+       * So review columns are written on every sync, and the one
+       * operational column they may touch, they may only touch in the
+       * SAFE direction: a declaration that is not ENABLED forces
+       * isEnabled false. An operator can still switch an approved source
+       * off and have that survive; nobody can switch an unapproved one on.
        */
-      update: {},
+      update: {
+        displayName: descriptor.displayName,
+        category: descriptor.category,
+        accessState: descriptor.access.state,
+        accessNote: descriptor.access.note,
+        accessReviewedAt: descriptor.access.reviewedAt,
+        requiresCredentials: descriptor.credentials !== null,
+        attribution: descriptor.attribution,
+        licenceBasis: descriptor.licenceBasis,
+        licenceNote: descriptor.licenceNote,
+        licenceReviewedAt: descriptor.licenceReviewedAt,
+        mayRedistributeDerived: descriptor.mayRedistributeDerived,
+        ...(enabledByAccess ? {} : { isEnabled: false }),
+      },
       create: {
         slug: descriptor.slug,
         displayName: descriptor.displayName,
         kind: 'JOB_BOARD',
         identityBasis: descriptor.adapter.identityBasis,
+        category: descriptor.category,
+        accessState: descriptor.access.state,
+        accessNote: descriptor.access.note,
+        accessReviewedAt: descriptor.access.reviewedAt,
+        /*
+         * A boolean, from whether a requirement was declared. The KEY
+         * NAMES stay in code and the values stay in the environment;
+         * neither belongs in a row a read path could select.
+         */
+        requiresCredentials: descriptor.credentials !== null,
+        attribution: descriptor.attribution,
         licenceBasis: descriptor.licenceBasis,
         licenceNote: descriptor.licenceNote,
         licenceReviewedAt: descriptor.licenceReviewedAt,
         /*
          * Taken from the descriptor against a schema default of false, so
          * enabling a source remains an act somebody performed rather than
-         * a consequence of inserting a row.
+         * a consequence of inserting a row - and ANDed with the access
+         * state, so the two cannot be inserted disagreeing. The database
+         * refuses that combination outright as well; this is the same rule
+         * said twice, on purpose, because it is the rule that decides
+         * whether an unapproved provider can be walked.
          */
-        isEnabled: descriptor.isEnabled,
+        isEnabled: descriptor.isEnabled && enabledByAccess,
         mayRedistributeDerived: descriptor.mayRedistributeDerived,
       },
       select: {
         id: true,
         slug: true,
         isEnabled: true,
+        accessState: true,
         identityBasis: true,
       },
     });

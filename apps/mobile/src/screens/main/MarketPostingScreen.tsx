@@ -191,6 +191,22 @@ export function MarketPostingScreen() {
               .toISOString()
               .slice(0, 10)}
           </AppText>
+          {/*
+           * The attribution the source's licence requires, verbatim.
+           *
+           * Rendered only when there IS one: several sources are used
+           * under licences that waive attribution expressly, and a blank
+           * line under a heading is worse than no line. It is deliberately
+           * source-NEUTRAL - the same slot carries "Contains public sector
+           * information licensed under the Open Government Licence v3.0"
+           * and whatever a future partner feed obliges - so no employer
+           * and no provider gets its own piece of UI.
+           */}
+          {posting.provenance.source?.attribution == null ? null : (
+            <AppText variant="caption" muted style={styles.line}>
+              {posting.provenance.source.attribution}
+            </AppText>
+          )}
         </Card>
       </View>
 

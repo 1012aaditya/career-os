@@ -101,6 +101,19 @@ export class MarketGraphService {
         mayRedistributeDerived: true,
         licenceNote: true,
         licenceReviewedAt: true,
+        /*
+         * Phase 11. `category` and `attribution` are facts about the
+         * relationship and about what must be displayed - both safe, both
+         * useful to a reader deciding what a source is.
+         *
+         * accessState, accessNote and requiresCredentials are DELIBERATELY
+         * absent. They record who was asked what, which sources were
+         * refused and on what grounds, and whether a host is configured -
+         * internal operational material with no reader-facing meaning. The
+         * CLI's `health` report is where those live.
+         */
+        category: true,
+        attribution: true,
         expectedPostingLifetimeDays: true,
         pollIntervalHours: true,
       },

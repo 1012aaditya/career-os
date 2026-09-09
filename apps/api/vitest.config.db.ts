@@ -26,8 +26,27 @@ export default defineConfig({
     globals: true,
     root: './',
     include: ['test/market-graph/**/*.db.spec.ts'],
-    /* One database, shared truncation - these must not interleave. */
+    /*
+     * One database, shared truncation - these must not interleave.
+     *
+     * `fileParallelism: false` alone did not achieve that, and Phase 11
+     * found out the way these things are always found out: adding a
+     * fourth file made a fifth test fail, intermittently, in the middle
+     * of a file whose own setup was fine. Tests 1-41 of the search tier
+     * passed, test 42 saw a corpus with no skills in it, and tests 43-46
+     * passed again - which is not a bug in any of them. It is another
+     * file's `TRUNCATE ... CASCADE` landing mid-run.
+     *
+     * So the single fork is pinned explicitly rather than implied. The
+     * tier is a few seconds long and shares one database; there is
+     * nothing to gain from concurrency here and one whole class of
+     * phantom failure to lose.
+     */
     fileParallelism: false,
+    pool: 'forks',
+    poolOptions: { forks: { singleFork: true } },
+    maxWorkers: 1,
+    minWorkers: 1,
     testTimeout: 60_000,
     hookTimeout: 60_000,
   },

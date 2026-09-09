@@ -12,6 +12,15 @@ import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SupabaseClientService } from '../auth/supabase.client.js';
 import { CareerGraphIngestionService } from '../career-graph/career-graph-ingestion.service.js';
+import {
+  ACTIVE_IMPORT_STATUSES,
+  checkFileName,
+  IMPORT_WINDOW_MS,
+  MAX_ACTIVE_IMPORTS,
+  MAX_IMPORTS_PER_WINDOW,
+  rejectionMessage,
+  sanitizeFileName,
+} from './upload-policy.js';
 
 @Injectable()
 export class ResumeImportService {
@@ -23,34 +32,82 @@ export class ResumeImportService {
     private readonly careerGraphIngestionService: CareerGraphIngestionService,
   ) {}
 
+  /**
+   * Starts an import: validates, reserves a slot, and mints an upload URL.
+   *
+   * `now` is a parameter rather than a clock read inside, so the rolling
+   * window can be tested at a stated instant instead of by waiting.
+   */
   async create(
     userId: string,
     fileName: string,
+    now: Date = new Date(),
   ) {
-    const normalizedFileName =
-      fileName.trim();
+    /*
+     * Server-side, and not because the client is untrustworthy in
+     * principle but because it is untrusted in fact: anything holding a
+     * bearer token can call this endpoint directly, and the app's own
+     * `.pdf` check never runs for those callers.
+     */
+    const rejection = checkFileName(fileName);
 
-    if (!normalizedFileName) {
-      throw new BadRequestException(
-        'fileName is required',
-      );
+    if (rejection !== null) {
+      throw new BadRequestException(rejectionMessage(rejection));
     }
 
-    const safeFileName =
-      normalizedFileName
-        .replace(
-          /[^a-zA-Z0-9._-]/g,
-          '_',
-        )
-        .slice(0, 200);
+    const normalizedFileName = fileName.trim();
+    const safeFileName = sanitizeFileName(normalizedFileName);
 
     const id = randomUUID();
 
     const storagePath =
       `${userId}/${id}/${safeFileName}`;
 
-    const resumeImport =
-      await this.prisma.resumeImport.create({
+    /*
+     * The count and the insert happen under one row lock, and that is the
+     * whole point of the transaction.
+     *
+     * Counting outside it is the classic check-then-act race: two requests
+     * both read "2 active", both decide there is room for a third, and the
+     * user ends with four. Locking the USER row serialises only that one
+     * user's import creations - two different users never contend - and it
+     * needs no new schema, because the row already exists and is already
+     * the thing both requests have in common.
+     *
+     * FOR UPDATE on User rather than a lock on ResumeImport: the rows being
+     * counted are the rows being created, so there is nothing stable to
+     * lock on that side. The user is the invariant.
+     */
+    const resumeImport = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${userId}::uuid FOR UPDATE`;
+
+      const active = await tx.resumeImport.count({
+        where: {
+          userId,
+          status: { in: [...ACTIVE_IMPORT_STATUSES] },
+        },
+      });
+
+      if (active >= MAX_ACTIVE_IMPORTS) {
+        throw new ConflictException(
+          `You already have ${MAX_ACTIVE_IMPORTS} resume imports in progress. Finish or remove one before starting another.`,
+        );
+      }
+
+      const recent = await tx.resumeImport.count({
+        where: {
+          userId,
+          createdAt: { gte: new Date(now.getTime() - IMPORT_WINDOW_MS) },
+        },
+      });
+
+      if (recent >= MAX_IMPORTS_PER_WINDOW) {
+        throw new ConflictException(
+          'Too many resume imports started recently. Please try again later.',
+        );
+      }
+
+      return tx.resumeImport.create({
         data: {
           id,
           userId,
@@ -58,6 +115,7 @@ export class ResumeImportService {
           storagePath,
         },
       });
+    });
 
     const {
       data,
@@ -69,20 +127,31 @@ export class ResumeImportService {
           storagePath,
         );
 
-    if (error) {
+    if (error || !data) {
       await this.prisma.resumeImport.update({
         where: {
           id: resumeImport.id,
         },
         data: {
           status: 'FAILED',
-          errorMessage:
-            error.message,
+          /*
+           * The provider's own text, kept INTERNALLY. This column is read
+           * back by the owner of the import and by nobody else, and it is
+           * the only place the real cause survives until PR-5 gives us
+           * somewhere better to put it.
+           */
+          errorMessage: error?.message ?? 'Unknown storage error',
         },
       });
 
+      /*
+       * A stable sentence, not the provider's. A raw storage error names
+       * buckets, internal endpoints and occasionally request ids - none of
+       * which helps the person holding the phone, and all of which
+       * describes our infrastructure to whoever asked.
+       */
       throw new BadRequestException(
-        `Unable to create upload URL: ${error.message}`,
+        'Unable to start the resume upload. Please try again.',
       );
     }
 

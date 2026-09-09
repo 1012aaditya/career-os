@@ -10,10 +10,13 @@ import {
   UseGuards,
 } from '@nestjs/common';
 
+import { Throttle } from '@nestjs/throttler';
+
 import { AuthGuard } from '../auth/auth.guard.js';
 import type { AuthenticatedRequest } from '../auth/auth.guard.js';
 
 import { ResumeImportService } from './resume-import.service.js';
+import { IMPORT_THROTTLE } from '../throttling.js';
 
 
 @Controller('resume-imports')
@@ -23,7 +26,13 @@ export class ResumeImportController {
     private readonly resumeImportService: ResumeImportService,
   ) {}
 
+  /*
+   * The tightest tier in the API. Every call mints a storage upload URL
+   * and writes a row, so this is the one authenticated route where an
+   * unbounded caller costs real money. See throttling.ts.
+   */
   @Post()
+  @Throttle(IMPORT_THROTTLE)
   async create(
     @Req() req: AuthenticatedRequest,
     @Body() body: { fileName?: string },

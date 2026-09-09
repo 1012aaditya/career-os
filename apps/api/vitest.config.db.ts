@@ -25,7 +25,15 @@ export default defineConfig({
   test: {
     globals: true,
     root: './',
-    include: ['test/market-graph/**/*.db.spec.ts'],
+    /*
+     * Widened from test/market-graph/** in PR-2. The database tier is not
+     * a market-graph tier - it is the tier for anything whose correctness
+     * IS the database's behaviour, and a row lock serialising two
+     * concurrent import creations is exactly that. A double has no rows
+     * and no locks, so it can only prove the lock is requested; only a
+     * real Postgres proves it works.
+     */
+    include: ['test/**/*.db.spec.ts'],
     /*
      * One database, shared truncation - these must not interleave.
      *
@@ -44,7 +52,9 @@ export default defineConfig({
      */
     fileParallelism: false,
     pool: 'forks',
-    poolOptions: { forks: { singleFork: true } },
+    /* Vitest 4 moved the fork options to the top level; `poolOptions` is
+     * gone and passing it is a no-op that only prints a deprecation. */
+    isolate: false,
     maxWorkers: 1,
     minWorkers: 1,
     testTimeout: 60_000,

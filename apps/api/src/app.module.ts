@@ -92,9 +92,33 @@ import { StructuredLogger } from './observability/structured-logger.js';
 
         return new RedisThrottlerStorage(
           new Redis(url, {
+            /*
+             * Connect on first use, so a Redis that is down at boot does
+             * not stop the API starting. Rate limiting is not worth
+             * refusing to serve over.
+             */
             lazyConnect: true,
+            /*
+             * enableOfflineQueue TRUE, and this was found by measurement
+             * rather than by reasoning.
+             *
+             * With it false, the very first increment after boot is issued
+             * before the connection is up and fails immediately - which
+             * dropped the instance into its degraded window and left the
+             * first seconds of every instance's life counting per-process,
+             * with nothing in Redis and no sign of it but one log line.
+             * Verified against a live Redis: three requests after boot
+             * created zero keys.
+             *
+             * True lets that first command wait for the connection instead
+             * of failing. It does not reintroduce unbounded queueing: a
+             * genuinely unreachable Redis exhausts maxRetriesPerRequest
+             * and rejects, which is the path the degraded fallback exists
+             * for and which a test against a dead port covers.
+             */
+            enableOfflineQueue: true,
             maxRetriesPerRequest: 1,
-            enableOfflineQueue: false,
+            connectTimeout: 2_000,
           }),
           memory,
           logger,

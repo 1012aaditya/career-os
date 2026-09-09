@@ -122,7 +122,7 @@ compensate for latency — that was measured and made things worse.
 
 - **Image**: multi-stage, built from the repository root because the pnpm
   lockfile lives there. Runs as the unprivileged `node` user. **Verified**
-  that the image builds; see "Known build gotcha" below.
+  that the image builds; see the defects found below.
 - **Start command**: `node dist/main`, deliberately not `pnpm start:prod`.
   A package manager in between swallows `SIGTERM`, so Nest's shutdown hooks
   never fire, the pool is never closed, and every deploy leaks connections.
@@ -135,19 +135,42 @@ compensate for latency — that was measured and made things worse.
   caller choose their own source address and hold an unlimited budget.
   The default is 0.
 
-### Known build gotcha, found by building it
+### Three defects found by actually building and running the image
 
-`prisma.config.ts` imports `dotenv/config`, but `dotenv` was declared
-nowhere. It worked on a developer machine only because pnpm happened to
-hoist it into `node_modules`; any clean or filtered install failed at
-`prisma generate`. PR-6 declared it. The Prisma CLI moved from dev to
-production dependencies for the same reason — the release step runs
-`prisma migrate deploy` inside the runtime image.
+None of these are visible from reading the code. Each would have broken or
+silently degraded the first production deploy.
 
-This is the class of problem that only a reproducible build finds, and it
-would have failed the first production deploy.
+**1. `dotenv` was declared nowhere.** `prisma.config.ts` imports
+`dotenv/config`, and it resolved on a developer machine only because pnpm
+happened to hoist it. Any clean or filtered install failed at `prisma
+generate`. Now declared. The Prisma CLI moved from dev to production
+dependencies for the same reason: the release step runs `prisma migrate
+deploy` inside the runtime image.
 
----
+**2. The container ignored SIGTERM entirely.** `docker stop` waited the
+full grace period and then SIGKILLed - exit 137, even at a 40 second
+timeout - while the same build stopped in 2 seconds on the host.
+
+The cause is PID 1: the kernel does not apply default signal dispositions
+to it, so SIGTERM was discarded and Nest's shutdown hooks never ran. The
+consequence is precisely what PR-2 added those hooks to prevent - every
+deploy abandoning in-flight requests and leaving the database pool open for
+the server to reap, on a pooler whose capacity is shared with the worker.
+PR-2's work was intact, and the container was quietly cancelling it.
+
+Fixed with `tini` as the image entrypoint. Measured after: stops in under a
+second, exit 143. `docker run --init` does the same thing, but Render does
+not pass it, so it belongs in the image.
+
+**3. `prisma migrate deploy` failed inside the image.** `schema.prisma`
+declares only a provider - the connection URL comes from `prisma.config.ts`
+reading `DATABASE_URL` - and that file was not copied into the runtime
+stage. The release command failed with "The datasource.url property is
+required", *after* the image had been built and was about to take traffic.
+Now copied.
+
+The general lesson is the one PR-6 exists for: a build that has only ever
+run on a laptop has not been tested.
 
 ## Migrations
 

@@ -52,8 +52,9 @@ RUN pnpm install --frozen-lockfile --filter api... --prod \
 # ---------- runtime ----------
 FROM node:24-slim AS runtime
 
+# tini, and it is not optional - see the ENTRYPOINT note below.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && apt-get install -y --no-install-recommends openssl ca-certificates tini \
   && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production
@@ -71,6 +72,12 @@ COPY --from=build --chown=node:node /repo/apps/api/package.json ./apps/api/
 # exactly the migrations this image was built from, rather than whatever
 # happens to be on the branch when the release runs.
 COPY --from=build --chown=node:node /repo/apps/api/prisma ./apps/api/prisma
+# prisma.config.ts too, and it is load-bearing: schema.prisma's datasource
+# block declares only a provider, so the connection URL comes from this
+# config file reading DATABASE_URL. Without it `prisma migrate deploy`
+# inside the image fails with "The datasource.url property is required",
+# which is a release step that fails after the image is already built.
+COPY --from=build --chown=node:node /repo/apps/api/prisma.config.ts ./apps/api/
 
 USER node
 
@@ -78,9 +85,23 @@ WORKDIR /repo/apps/api
 
 EXPOSE 3000
 
-# node directly, not `pnpm start:prod`. A package manager in between means
-# SIGTERM is delivered to pnpm, which does not forward it - so Nest's
-# shutdown hooks never run, the database pool is never closed, and every
-# deploy leaves connections for the server to reap. PR-2 added those hooks;
-# this is what lets them fire.
+# tini as PID 1, then node. MEASURED, not cargo-culted.
+#
+# Without it this image ignored SIGTERM completely: `docker stop` waited
+# the full grace period and then SIGKILLed, exit 137, even at 40 seconds.
+# With tini it stops in under a second, exit 143.
+#
+# The reason is PID 1. The kernel does not apply default signal
+# dispositions to PID 1, so a signal arriving before Node has its handler
+# fully wired is simply discarded - and Nest's shutdown hooks never run.
+# The consequence is exactly what PR-2 added those hooks to prevent: every
+# deploy abandons in-flight requests and leaves the database pool open for
+# the server to reap, on a pooler whose capacity is shared with the worker.
+#
+# `docker run --init` does the same thing, but Render does not pass it, so
+# it has to be in the image.
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+# node directly, not `pnpm start:prod`. A package manager in between is a
+# second process that also does not forward SIGTERM.
 CMD ["node", "dist/main"]

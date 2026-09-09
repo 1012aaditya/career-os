@@ -35,6 +35,17 @@ export default defineConfig({
        * under test is the chunking, not the Keychain.
        */
       'src/lib/**/*.test.ts',
+      /*
+       * PR-4. The request policy, the 401 latch, the deletion flows and
+       * the resume list are pure for the same reason everything else here
+       * is: they decide what happens, and the screens only render it. That
+       * split is what makes "a second press must not send a second DELETE"
+       * a testable claim rather than something you check by tapping fast.
+       */
+      'src/api/**/*.test.ts',
+      'src/account/**/*.test.ts',
+      'src/resume/**/*.test.ts',
+      'src/screens/**/*.test.ts',
     ],
   },
 });

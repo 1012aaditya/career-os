@@ -5,10 +5,32 @@ import {
   Card,
   EmptyState,
   Screen,
-  colors,
   spacing,
 } from '../../ui';
 
+/*
+ * Opportunities, before there is an Opportunity Engine.
+ *
+ * WHAT THIS SCREEN USED TO SAY, and why it had to change. It carried a
+ * section headed "Recommended for you" whose empty state read "Career OS
+ * needs more information about your experience, skills, and goals before
+ * it can recommend relevant opportunities" - which tells a user that a
+ * recommendation engine exists and is waiting on them. It does not exist.
+ * A user who then imported a resume, connected GitHub and completed their
+ * profile would return to exactly the same empty state, having been told
+ * the fault was theirs.
+ *
+ * That is the kind of copy that costs trust in a product whose whole claim
+ * is to be evidence-first and explainable.
+ *
+ * So the screen now says the true thing: this is not built yet. It shows
+ * no recommendations, invents no opportunity data, and does NOT quietly
+ * call Market Search and present the results as though they had been
+ * matched to the user - which would be the same claim with more steps.
+ *
+ * The matching itself is Phase 12. When it lands this screen gains the
+ * sections it needs; until then it is honest and structurally sound.
+ */
 export function OpportunitiesScreen() {
   return (
     <Screen>
@@ -19,59 +41,25 @@ export function OpportunitiesScreen() {
         <View>
           <AppText variant="title">Opportunities</AppText>
           <AppText variant="body" muted style={styles.subtitle}>
-            Discover opportunities aligned with your career.
+            Matching your career profile to the market.
           </AppText>
         </View>
 
-        <View style={styles.section}>
-          <AppText variant="heading">Recommended for you</AppText>
-
-          <Card>
-            <EmptyState
-      title="No recommendations yet"
-      message="Career OS needs more information about your experience, skills, and goals before it can recommend relevant opportunities."
-      />
-          </Card>
-        </View>
+        <Card>
+          <EmptyState
+            title="Not available yet"
+            message="Career OS does not match opportunities to your profile yet. When it does, every match will show the experience, skills and evidence it was based on."
+          />
+        </Card>
 
         <View style={styles.section}>
-          <AppText variant="heading">Explore</AppText>
-
-          <Card>
-            <AppText variant="bodyMedium">
-              Personalized discovery is coming soon.
-            </AppText>
-
-            <AppText variant="body" muted style={styles.cardText}>
-              Future opportunities will be ranked based on how well they fit
-              your career profile and direction.
-            </AppText>
-          </Card>
-        </View>
-
-        <View style={styles.section}>
-          <AppText variant="heading">Why these opportunities?</AppText>
+          <AppText variant="heading">In the meantime</AppText>
 
           <Card>
             <AppText variant="body" muted>
-              Career OS will explain why each opportunity is relevant to you,
-              including the skills, experience, and career direction that
-              contributed to the match.
-            </AppText>
-          </Card>
-        </View>
-
-        <View style={styles.section}>
-          <AppText variant="heading">Your opportunity profile</AppText>
-
-          <Card>
-            <AppText variant="bodyMedium">
-              Your opportunity preferences will appear here.
-            </AppText>
-
-            <AppText variant="body" muted style={styles.cardText}>
-              This will eventually help Career OS understand the kinds of
-              roles and opportunities you want to pursue.
+              You can search the market directly from the Market tab, and
+              keep building your profile from the Career tab. Both feed the
+              matching when it arrives.
             </AppText>
           </Card>
         </View>
@@ -90,23 +78,5 @@ const styles = StyleSheet.create({
   },
   section: {
     gap: spacing.sm,
-  },
-  emptyIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: colors.muted,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing.md,
-  },
-  emptyIconText: {
-    color: colors.primary,
-  },
-  cardTitle: {
-    marginBottom: spacing.sm,
-  },
-  cardText: {
-    marginTop: spacing.sm,
   },
 });

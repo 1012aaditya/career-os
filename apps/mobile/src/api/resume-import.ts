@@ -132,3 +132,42 @@ export async function ingestResumeImport(
     },
   );
 }
+
+/*
+ * What deleting one import actually removes.
+ *
+ * The shape mirrors the server's response, and `careerGraphRetained` is
+ * the field that matters to the UI: the server deletes the import, its
+ * stored file and the evidence provably derived from it, and it KEEPS
+ * experiences, projects, education and skills - because nothing in the
+ * schema attributes those to a particular resume. The screen shows
+ * `careerGraphNote` rather than inventing its own sentence, so the copy a
+ * user reads and the behaviour the server implements cannot drift apart.
+ */
+export type ResumeImportDeletionResult = {
+  id: string;
+  deleted: boolean;
+  fileDeleted: boolean;
+  evidenceDeleted: number;
+  careerGraphRetained: boolean;
+  careerGraphNote: string;
+};
+
+/**
+ * Deletes one imported resume.
+ *
+ * Scoped by the server to the authenticated user: an id belonging to
+ * somebody else answers 404, exactly as an id that never existed does.
+ * Never retried automatically - a destructive call that timed out may
+ * already have succeeded.
+ */
+export async function deleteResumeImport(
+  id: string,
+): Promise<ResumeImportDeletionResult> {
+  return apiRequest<ResumeImportDeletionResult>(
+    `/resume-imports/${id}`,
+    {
+      method: 'DELETE',
+    },
+  );
+}

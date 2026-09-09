@@ -1,4 +1,12 @@
 import React, { useEffect, useState } from 'react';
+
+/*
+ * Errors are routed through describeError rather than rendered from a
+ * caught value. Anything that is not an ApiError is a bug in our own
+ * code, and its message is an internal string that should not appear in
+ * an Alert in front of a user.
+ */
+import { describeError } from '../api/client';
 import {
   ActivityIndicator,
   Alert,
@@ -131,9 +139,7 @@ export default function ResumeReviewScreen({
     } catch (error) {
       Alert.alert(
         'Unable to load resume',
-        error instanceof Error
-          ? error.message
-          : 'Something went wrong.',
+        describeError(error),
       );
     } finally {
       setLoading(false);
@@ -215,9 +221,7 @@ export default function ResumeReviewScreen({
     } catch (error) {
       Alert.alert(
         'Unable to save',
-        error instanceof Error
-          ? error.message
-          : 'Something went wrong.',
+        describeError(error),
       );
     } finally {
       setSaving(false);
@@ -267,9 +271,7 @@ export default function ResumeReviewScreen({
             } catch (error) {
               Alert.alert(
                 'Unable to confirm',
-                error instanceof Error
-                  ? error.message
-                  : 'Something went wrong.',
+                describeError(error),
               );
             } finally {
               setSaving(false);

@@ -9,6 +9,16 @@ type AppTextProps = {
   variant?: Variant;
   muted?: boolean;
   style?: TextStyle;
+  /**
+   * Truncates instead of wrapping.
+   *
+   * Added for the resume list, where the filename is arbitrary length and
+   * chosen by the user: a long one wrapping to three lines pushes the
+   * Delete control around and gives every row a different height. Passed
+   * straight through to Text, and undefined by default, so every existing
+   * caller behaves exactly as it did.
+   */
+  numberOfLines?: number;
 };
 
 export function AppText({
@@ -16,9 +26,11 @@ export function AppText({
   variant = 'body',
   muted = false,
   style,
+  numberOfLines,
 }: AppTextProps) {
   return (
     <Text
+      numberOfLines={numberOfLines}
       style={[
         styles.base,
         typography[variant],

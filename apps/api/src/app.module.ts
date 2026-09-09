@@ -4,6 +4,7 @@ import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { CareerGraphModule } from './career-graph/career-graph.module.js';
 import { ConfigModule } from '@nestjs/config';
 import { ResumeProcessingModule } from './resume-processing/resume-processing.module.js';
+import { AccountModule } from './account/account.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { HealthController } from './health.controller.js';
 import { PrismaModule } from './prisma/prisma.module.js';
@@ -32,6 +33,7 @@ import { THROTTLE_TIERS } from './throttling.js';
      */
     ThrottlerModule.forRoot(THROTTLE_TIERS),
     AuthModule,
+    AccountModule,
     PrismaModule,
     ResumeImportModule,
     ResumeProcessingModule,

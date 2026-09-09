@@ -27,6 +27,14 @@ export default defineConfig({
        * allowed to be called - and those are claims, not layout.
        */
       'src/market/**/*.test.ts',
+      /*
+       * Session persistence. Pure for the same reason the others are: it
+       * decides how a value is split, reassembled and cleared, and each of
+       * those is a claim about correctness rather than about layout. Its
+       * one native dependency, expo-secure-store, is mocked - what is
+       * under test is the chunking, not the Keychain.
+       */
+      'src/lib/**/*.test.ts',
     ],
   },
 });

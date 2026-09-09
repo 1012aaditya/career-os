@@ -35,18 +35,20 @@ export const ALLOWED_EXTENSIONS = ['.pdf'] as const;
 /**
  * Content types accepted when the stored object is checked.
  *
- * `application/octet-stream` is included and it is the uncomfortable one:
- * it is what a client sends when it does not know, and rejecting it would
- * fail legitimate uploads from HTTP clients that never set a type. It is
- * safe here only because it is not load-bearing - the worker parses the
- * bytes and a non-PDF fails there. This list stops casual mistakes; it is
- * not a defence against a determined uploader, and pretending otherwise
- * would be worse than saying so.
+ * Narrowed to PDF alone in PR-3, after the bucket's real configuration was
+ * verified rather than assumed: `resumes` is private, capped at 10 MB, and
+ * declares `allowed_mime_types: ["application/pdf"]`. Storage therefore
+ * refuses anything else at upload time.
+ *
+ * That verification removed the reason this list previously also allowed
+ * `application/octet-stream`. The argument for it was that a client which
+ * does not know the type sends octet-stream and should not be failed - but
+ * such a client is already rejected by the bucket, before this check ever
+ * runs. So the allowance could never help an honest caller and could only
+ * widen the second line of defence if the bucket were ever loosened. Two
+ * layers that agree are worth more than a layer that hedges.
  */
-export const ALLOWED_CONTENT_TYPES = [
-  'application/pdf',
-  'application/octet-stream',
-] as const;
+export const ALLOWED_CONTENT_TYPES = ['application/pdf'] as const;
 
 /**
  * 10 MB.
@@ -55,6 +57,12 @@ export const ALLOWED_CONTENT_TYPES = [
  * images is a few megabytes. 10 MB is comfortably above any real resume
  * and far below what would make the extraction worker or the storage bill
  * uncomfortable.
+ *
+ * Confirmed in PR-3 to match the bucket's own `file_size_limit` of
+ * 10485760 bytes exactly. The two are set independently - one here, one in
+ * Supabase - so they are asserted equal by a test rather than left to
+ * drift into a state where the application believes a file is acceptable
+ * that storage has already refused.
  */
 export const MAX_FILE_BYTES = 10 * 1024 * 1024;
 

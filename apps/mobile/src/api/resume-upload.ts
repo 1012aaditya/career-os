@@ -26,20 +26,21 @@ export async function pickAndUploadResume(): Promise<CreateResumeImportResponse 
     throw new Error('Please select a PDF resume');
   }
 
-  console.log('SELECTED RESUME:', {
-    name: file.name,
-    uri: file.uri,
-    size: file.size,
-    mimeType: file.mimeType,
-  });
 
+  /*
+   * Four console.log calls used to sit along this path, printing the
+   * file name, the local file URI, the storage path and the full upload
+   * result. Between them that is the user's own name - resumes are
+   * usually named after their author - their user id, and the location of
+   * the file on their device, written to the device console on every
+   * upload. There is no babel transform stripping console calls from
+   * release builds, so they shipped.
+   *
+   * Removed rather than guarded. PR-5 owns real logging; until it exists
+   * the honest amount of logging on a path that handles a resume is none.
+   */
   const resumeImport = await createResumeImport(file.name);
 
-  console.log('RESUME IMPORT CREATED:', {
-    id: resumeImport.id,
-    storagePath: resumeImport.storagePath,
-    uploadPath: resumeImport.uploadPath,
-  });
 
   const fileResponse = await fetch(file.uri);
 
@@ -49,10 +50,6 @@ export async function pickAndUploadResume(): Promise<CreateResumeImportResponse 
 
   const blob = await fileResponse.blob();
 
-  console.log('RESUME BLOB:', {
-    size: blob.size,
-    type: blob.type,
-  });
 
   const pdfBlob = new Blob([blob], {
     type: 'application/pdf',
@@ -70,12 +67,6 @@ export async function pickAndUploadResume(): Promise<CreateResumeImportResponse 
       },
     );
 
-  console.log('RESUME UPLOAD RESULT:', {
-    uploadData,
-    error,
-    uploadPath: resumeImport.uploadPath,
-    storagePath: resumeImport.storagePath,
-  });
 
   if (error) {
     throw new Error(`Resume upload failed: ${error.message}`);

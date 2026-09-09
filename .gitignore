@@ -7,6 +7,18 @@ coverage/
 .env.*
 !.env.example
 
+# A file named `env` - no leading dot - is NOT matched by the rules above,
+# and one already existed untracked at apps/api/env. `git add -A` would
+# have committed it. The pattern below is deliberately broad: `env` as a
+# whole path segment anywhere, plus the common typo'd variants, because
+# the cost of ignoring a file somebody wanted tracked is a puzzled minute
+# and the cost of the reverse is a credential in a public repository.
+env
+**/env
+env.local
+env.*.local
+*.env
+
 .DS_Store
 *.log
 

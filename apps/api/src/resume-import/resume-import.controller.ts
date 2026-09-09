@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -124,4 +125,23 @@ export class ResumeImportController {
       id,
     );
   }
+  /**
+   * Deletes one import, its stored file, and the evidence derived from it.
+   *
+   * Scoped to the authenticated user by the service, which answers 404 for
+   * an id belonging to somebody else - the same answer as for an id that
+   * never existed, so the route cannot be used to discover which ids are
+   * real.
+   */
+  @Delete(':id')
+  async remove(
+    @Req() req: AuthenticatedRequest,
+    @Param('id') id: string,
+  ) {
+    return this.resumeImportService.remove(
+      req.user.id,
+      id,
+    );
+  }
+
 }

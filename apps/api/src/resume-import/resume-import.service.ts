@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
 
@@ -12,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SupabaseClientService } from '../auth/supabase.client.js';
 import { CareerGraphIngestionService } from '../career-graph/career-graph-ingestion.service.js';
+import { UserStorageService } from '../account/user-storage.service.js';
 import {
   ACTIVE_IMPORT_STATUSES,
   checkFileName,
@@ -30,6 +32,7 @@ export class ResumeImportService {
     private readonly prisma: PrismaService,
     private readonly supabase: SupabaseClientService,
     private readonly careerGraphIngestionService: CareerGraphIngestionService,
+    private readonly userStorage: UserStorageService,
   ) {}
 
   /**
@@ -510,4 +513,100 @@ export class ResumeImportService {
        */
     }
   }
+  /**
+   * Deletes one resume import: the row, its file, and the evidence that
+   * provably came from it.
+   *
+   * WHAT THIS DOES NOT DELETE, and why that is a finding rather than a
+   * shortcut. Experience, Project, Education, Achievement, UserSkill and
+   * Profile carry NO reference to the import that produced them - only
+   * Evidence and CareerGraphIngestion do. So for a user with two imports
+   * there is no column, and no derivable fact, that says which of their
+   * experiences came from which resume. Deleting "the career data from
+   * this resume" is therefore not something the schema can express, and
+   * guessing at it would silently destroy rows the user reviewed, edited
+   * and may have built on since.
+   *
+   * The response says so explicitly rather than leaving the caller to
+   * assume, because a deletion that quietly does less than its name
+   * suggests is worse than one that is clear about its scope.
+   *
+   * WHY EVIDENCE IS DELETED RATHER THAN ORPHANED. The schema's own
+   * behaviour for `Evidence.resumeImport` is SetNull, which would leave a
+   * row titled "Resume: jane-doe-cv.pdf" pointing at nothing - residual
+   * personal data, the user's own filename, surviving a deletion they
+   * asked for. Deleting those rows is both cleaner and closer to what
+   * "delete this resume" means. The links from that evidence to
+   * experiences and skills cascade with it; the experiences themselves do
+   * not, which is the same boundary as above.
+   *
+   * Scoped by { id, userId } like every other read and write here, so an
+   * id belonging to another user is a 404 and never a deletion.
+   *
+   * Idempotent: a second call finds nothing and says so.
+   */
+  async remove(userId: string, id: string) {
+    const resumeImport =
+      await this.prisma.resumeImport.findFirst({
+        where: { id, userId },
+        select: { id: true, storagePath: true },
+      });
+
+    if (!resumeImport) {
+      /*
+       * The same answer for "already deleted" and "belongs to somebody
+       * else". A caller must not be able to tell those apart - the
+       * difference is exactly the information an id-guessing attack is
+       * looking for.
+       */
+      throw new NotFoundException('Resume import not found');
+    }
+
+    /*
+     * Storage first, for the same reason account deletion does it first:
+     * the row is the only record of which object to remove. Losing it
+     * while the file remains leaves an object nothing points at.
+     */
+    const fileDeleted = await this.userStorage.deleteObject(
+      userId,
+      resumeImport.storagePath,
+    );
+
+    if (!fileDeleted) {
+      throw new InternalServerErrorException(
+        'The resume file could not be removed. Nothing was deleted; please try again.',
+      );
+    }
+
+    /*
+     * One transaction for the two row deletions, so a failure between
+     * them cannot leave evidence referring to an import that is gone.
+     */
+    const evidenceDeleted = await this.prisma.$transaction(async (tx) => {
+      const evidence = await tx.evidence.deleteMany({
+        where: { userId, resumeImportId: id },
+      });
+
+      await tx.resumeImport.deleteMany({ where: { id, userId } });
+
+      return evidence.count;
+    });
+
+    return {
+      id,
+      deleted: true,
+      fileDeleted,
+      evidenceDeleted,
+      /*
+       * Stated in the response, not only in a comment. The client shows
+       * this to the user, because "your resume was deleted" and "the
+       * experiences it created are still in your profile" are two
+       * different sentences and the user is entitled to both.
+       */
+      careerGraphRetained: true,
+      careerGraphNote:
+        'Experiences, projects, education and skills already in your profile were kept. They cannot be traced back to a single resume, and may have been edited since.',
+    };
+  }
+
 }

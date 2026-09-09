@@ -72,6 +72,18 @@ export const IMPORT_THROTTLE = {
   default: { ttl: IMPORT_THROTTLE_TTL_MS, limit: IMPORT_THROTTLE_LIMIT },
 };
 
+/**
+ * Account deletion: 5 per hour.
+ *
+ * Not a route anybody calls repeatedly in normal use, and an expensive one
+ * - it walks a storage prefix and cascades a dozen tables. Five leaves
+ * room for a user retrying after a network failure, which is the only
+ * legitimate reason to call it twice.
+ */
+export const ACCOUNT_DELETION_THROTTLE = {
+  default: { ttl: 3_600_000, limit: 5 },
+};
+
 export const WORKER_THROTTLE = {
   default: { ttl: WORKER_THROTTLE_TTL_MS, limit: WORKER_THROTTLE_LIMIT },
 };

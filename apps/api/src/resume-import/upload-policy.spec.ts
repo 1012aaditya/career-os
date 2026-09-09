@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ACTIVE_IMPORT_STATUSES,
+  ALLOWED_CONTENT_TYPES,
   checkFileName,
   checkStoredFile,
   MAX_ACTIVE_IMPORTS,
@@ -150,15 +151,27 @@ describe('what storage turned out to be holding', () => {
   });
 
   /*
-   * The uncomfortable allowance, asserted so it is a decision rather than
-   * an accident: clients that do not know the type send octet-stream, and
-   * refusing it would fail legitimate uploads. The bytes still have to
-   * parse as a PDF in the worker.
+   * Narrowed in PR-3 once the bucket's real policy was verified: storage
+   * declares allowed_mime_types ["application/pdf"], so an octet-stream
+   * upload never lands and the previous allowance could only ever widen
+   * this check without helping anybody.
    */
-  it('allows an unknown content type rather than failing honest clients', () => {
+  it('refuses an unknown content type, matching the bucket policy', () => {
     expect(
       checkStoredFile({ ...ok, contentType: 'application/octet-stream' }),
-    ).toBeNull();
+    ).toBe('content_type_not_allowed');
+  });
+
+  /*
+   * The two layers are configured in different places - this constant, and
+   * the bucket's file_size_limit in Supabase - and they were verified
+   * equal on 2026-09-09. Pinned so that changing one without the other is
+   * a failing test rather than a silent disagreement in which the
+   * application accepts what storage has already refused.
+   */
+  it('matches the verified bucket limits exactly', () => {
+    expect(MAX_FILE_BYTES).toBe(10_485_760);
+    expect([...ALLOWED_CONTENT_TYPES]).toEqual(['application/pdf']);
   });
 
   /*

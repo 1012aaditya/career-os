@@ -92,6 +92,12 @@ export function createInMemoryPrisma() {
   const syncRuns: SyncRunRow[] = [];
   const evidence: EvidenceRow[] = [];
 
+  /* Every evidence.updateMany the run issued, so a test can count them. */
+  const evidenceUpdateManyCalls: {
+    ids: string[];
+    data: Record<string, unknown>;
+  }[] = [];
+
   const oAuthAuthorizationRequest = {
     create: async ({ data }: { data: Omit<AuthRequestRow, 'id' | 'consumedAt' | 'createdAt'> }) => {
       if (
@@ -610,6 +616,49 @@ export function createInMemoryPrisma() {
       return row;
     },
 
+    /*
+     * The freshness heartbeat, applied for real.
+     *
+     * It writes only the columns the caller names, exactly as Postgres
+     * would - which is the whole point of modelling it rather than
+     * stubbing it. A double that ignored `data`, or that assigned the
+     * whole row, could not tell the difference between advancing
+     * lastObservedAt and re-stamping capturedAt, and the tests asserting
+     * that the heartbeat touches nothing else would pass over an
+     * implementation that touched everything.
+     *
+     * `updates` is counted so a test can prove the run issued ONE
+     * statement rather than one per repository.
+     */
+    updateMany: async ({
+      where,
+      data,
+    }: {
+      where: { id: { in: string[] } };
+      data: Record<string, unknown>;
+    }) => {
+      evidenceUpdateManyCalls.push({
+        ids: [...where.id.in],
+        data: { ...data },
+      });
+
+      let count = 0;
+
+      for (const row of evidence) {
+        if (!where.id.in.includes(row.id)) {
+          continue;
+        }
+
+        Object.assign(row, data, {
+          updatedAt: new Date(),
+        });
+
+        count += 1;
+      }
+
+      return { count };
+    },
+
     upsert: async ({
       where,
       create,
@@ -707,6 +756,17 @@ export function createInMemoryPrisma() {
       connections,
       syncRuns,
       evidence,
+    },
+    /*
+     * What the run actually issued, as distinct from what it stored.
+     *
+     * Needed because "one statement per sync rather than one per
+     * repository" is a property of the CALLS, not of the resulting rows -
+     * fourteen individual updates and one batched update leave the
+     * database in exactly the same state.
+     */
+    calls: {
+      evidenceUpdateMany: evidenceUpdateManyCalls,
     },
   };
 }

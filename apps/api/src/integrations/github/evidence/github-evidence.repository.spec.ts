@@ -73,7 +73,7 @@ describe('GithubEvidenceRepository', () => {
         input(),
       );
 
-      expect(result).toEqual({ created: true });
+      expect(result).toMatchObject({ created: true });
       expect(store.rows.evidence).toHaveLength(1);
 
       const row = store.rows.evidence[0]!;
@@ -170,7 +170,7 @@ describe('GithubEvidenceRepository', () => {
         }),
       );
 
-      expect(result).toEqual({ created: false });
+      expect(result).toMatchObject({ created: false });
       expect(store.rows.evidence).toHaveLength(1);
 
       const row = store.rows.evidence[0]!;
@@ -207,7 +207,7 @@ describe('GithubEvidenceRepository', () => {
         }),
       );
 
-      expect(result).toEqual({ created: false });
+      expect(result).toMatchObject({ created: false });
       expect(store.rows.evidence).toHaveLength(1);
 
       const row = store.rows.evidence[0]!;
@@ -367,7 +367,7 @@ describe('GithubEvidenceRepository', () => {
       );
 
       expect(raced).toBe(true);
-      expect(result).toEqual({ created: false });
+      expect(result).toMatchObject({ created: false });
       expect(store.rows.evidence).toHaveLength(1);
 
       const row = store.rows.evidence[0]!;
@@ -427,7 +427,7 @@ describe('GithubEvidenceRepository', () => {
 
       await expect(
         repository.persist(USER_A, input()),
-      ).resolves.toEqual({ created: true });
+      ).resolves.toMatchObject({ created: true });
     });
   });
 
@@ -488,7 +488,7 @@ describe('GithubEvidenceRepository', () => {
         input(),
       );
 
-      expect(result).toEqual({ created: true });
+      expect(result).toMatchObject({ created: true });
       expect(store.rows.evidence).toHaveLength(2);
 
       const untouched =

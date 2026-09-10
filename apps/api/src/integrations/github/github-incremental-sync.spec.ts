@@ -733,7 +733,7 @@ describe('a second sync over an unchanged repository', () => {
     expect(store.rows.evidence).toHaveLength(1);
   });
 
-  it('writes nothing at all, so updatedAt and capturedAt do not churn', async () => {
+  it('advances only lastObservedAt, so capturedAt and the observation do not churn', async () => {
     network({ repos: { body: [repo(1)] } });
 
     const { sync, store } = await build();
@@ -744,7 +744,6 @@ describe('a second sync over an unchanged repository', () => {
 
     const before = evidenceFor(store, 1);
 
-    const updatedAt = before.updatedAt.getTime();
     const capturedAt =
       before.capturedAt.getTime();
 
@@ -754,12 +753,47 @@ describe('a second sync over an unchanged repository', () => {
 
     const after = evidenceFor(store, 1);
 
-    expect(after.updatedAt.getTime()).toBe(
-      updatedAt,
-    );
+    /*
+     * capturedAt is the invariant that matters and it does not move. The
+     * evidence sheet orders by it, so re-stamping it would reorder a
+     * user's evidence every time a sync confirmed nothing had changed -
+     * which is the defect the no-churn guard was built to fix.
+     */
     expect(after.capturedAt.getTime()).toBe(
       capturedAt,
     );
+
+    /*
+     * updatedAt DOES move now, and that is the approved PR-6 exception
+     * rather than a regression. An unchanged row still needs to record
+     * that it was successfully re-observed: without it, a repository
+     * confirmed identical a minute ago and one not looked at since
+     * January are indistinguishable, and "last verified" is unanswerable.
+     *
+     * Nothing orders by updatedAt - checked across every Evidence read
+     * path before this was written - so advancing it changes no
+     * observable ordering.
+     *
+     * It is deliberately NOT asserted on. Both writes can land inside one
+     * millisecond, which is the same accident the original comment here
+     * warned about, so a timestamp comparison would be flaky in exactly
+     * the way that teaches people to re-run the suite. The call log below
+     * proves the heartbeat fired, deterministically and more precisely.
+     */
+    expect(after.lastObservedAt).not.toBeNull();
+    expect(
+      after.lastObservedAt!.toISOString(),
+    ).toBe(SECOND_SCAN);
+
+    /* One statement for the run, not one per repository. */
+    expect(store.calls.evidenceUpdateMany).toHaveLength(
+      1,
+    );
+    expect(
+      Object.keys(
+        store.calls.evidenceUpdateMany[0]!.data,
+      ),
+    ).toEqual(['lastObservedAt']);
 
     /*
      * The decisive assertion, because two writes inside one millisecond
@@ -912,8 +946,19 @@ describe('a repository that is new in the second sync', () => {
     });
 
     const existing = evidenceFor(store, 1);
-    const untouchedAt =
-      existing.updatedAt.getTime();
+    /*
+     * The OBSERVATION is what must not be disturbed, so that is what is
+     * snapshotted. updatedAt is not: since PR-6's approved exception the
+     * unchanged row does receive a freshness heartbeat, and asserting on
+     * updatedAt here compared two writes that regularly land inside the
+     * same millisecond - which failed about one run in three.
+     */
+    const untouched = {
+      capturedAt: existing.capturedAt.getTime(),
+      title: existing.title,
+      externalId: existing.externalId,
+      metadata: JSON.stringify(existing.metadata),
+    };
 
     net.script({
       repos: { body: [repo(1), repo(3)] },
@@ -933,9 +978,26 @@ describe('a repository that is new in the second sync', () => {
       ).externalId,
     ).toBe('github:repo:3');
 
+    /*
+     * The pre-existing row's evidence is byte-for-byte what it was. Only
+     * its lastObservedAt moved, because this run did successfully
+     * re-observe it alongside the new one.
+     */
+    const after = evidenceFor(store, 1);
+
+    expect(after.capturedAt.getTime()).toBe(
+      untouched.capturedAt,
+    );
+    expect(after.title).toBe(untouched.title);
+    expect(after.externalId).toBe(
+      untouched.externalId,
+    );
+    expect(JSON.stringify(after.metadata)).toBe(
+      untouched.metadata,
+    );
     expect(
-      evidenceFor(store, 1).updatedAt.getTime(),
-    ).toBe(untouchedAt);
+      after.lastObservedAt!.toISOString(),
+    ).toBe(SECOND_SCAN);
   });
 });
 

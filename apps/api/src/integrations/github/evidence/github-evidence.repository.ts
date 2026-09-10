@@ -57,6 +57,18 @@ type EvidenceWritableFields = {
   occurredAt: Date | null;
   capturedAt: Date;
   metadata: Prisma.InputJsonObject;
+  /*
+   * The reliability contract, carried straight through from the
+   * projection. lastObservedAt is deliberately NOT here: it is not a
+   * content field, it is written on a different schedule from the rest,
+   * and mixing it in is precisely how it would end up re-stamped by a
+   * write that observed nothing.
+   */
+  authenticity: 'DIRECT_API_OBSERVATION';
+  attribution: 'AUTHENTICATED_ACCOUNT';
+  completeness: 'PARTIAL' | 'NOT_SCANNED' | 'ACCESS_LOST';
+  transformVersion: number;
+  independenceKey: string | null;
 };
 
 /** The subset of an existing row needed to decide whether to write. */
@@ -73,6 +85,16 @@ type ExistingEvidence = {
 export type PersistResult = {
   /** True when this call inserted the row rather than updating one. */
   created: boolean;
+  /*
+   * The row id when this call wrote nothing because nothing changed, AND
+   * the repository was nonetheless SUCCESSFULLY observed.
+   *
+   * Returned rather than written here so persistMany can advance them all
+   * in a single statement. One update per repository would put a write
+   * back on the path the no-churn guard exists to keep clear - fourteen
+   * round trips a sync to record that nothing happened.
+   */
+  heartbeatId: string | null;
 };
 
 export type PersistManyResult = {
@@ -110,6 +132,11 @@ function writableFields(
     occurredAt: input.occurredAt,
     capturedAt: input.capturedAt,
     metadata: jsonMetadata(input.metadata),
+    authenticity: input.authenticity,
+    attribution: input.attribution,
+    completeness: input.completeness,
+    transformVersion: input.transformVersion,
+    independenceKey: input.independenceKey,
   };
 }
 
@@ -531,15 +558,30 @@ export class GithubEvidenceRepository {
      * second condition is the one that catches a carry-forward that
      * silently failed to carry.
      */
+    /*
+     * The two ways this run failed to observe the repository, named so
+     * the heartbeat below can refuse to fire on either.
+     *
+     * `didNotLook` is the declared state - skipped for budget, or access
+     * lost. `carryForwardFailed` is the silent one: the run CLAIMS to
+     * have scanned, and yet arrives with no count over a row that has
+     * one, which means the carry-forward did not carry. Both produce a
+     * merge, and neither is a successful observation.
+     */
+    const didNotLook = NON_OBSERVING.has(
+      completenessOf(next.metadata) ?? '',
+    );
+
+    const carryForwardFailed =
+      existing !== null &&
+      wouldEraseKnownCount(
+        existing.metadata,
+        next.metadata,
+      );
+
     const merged =
       existing !== null &&
-      (NON_OBSERVING.has(
-        completenessOf(next.metadata) ?? '',
-      ) ||
-        wouldEraseKnownCount(
-          existing.metadata,
-          next.metadata,
-        ))
+      (didNotLook || carryForwardFailed)
         ? {
             ...next,
             metadata: jsonMetadata(
@@ -571,7 +613,31 @@ export class GithubEvidenceRepository {
       existing &&
       isUnchanged(existing, merged)
     ) {
-      return { created: false };
+      /*
+       * Nothing observable changed, so nothing is written HERE - the
+       * no-churn guard is intact and capturedAt does not move.
+       *
+       * But "unchanged" and "unverified" are different facts, and before
+       * this the row could not tell them apart: a repository confirmed
+       * identical an hour ago and one not looked at since January both
+       * carried the same frozen timestamps. So the id is handed back for
+       * the batched heartbeat, which advances lastObservedAt and nothing
+       * else.
+       *
+       * It fires only on a clean observation. A run that did not look, or
+       * whose carry-forward failed, must leave the earlier truthful value
+       * alone: recording "verified today" because the sync process ran is
+       * the exact lie this column exists to prevent.
+       */
+      const cleanlyObserved =
+        input.lastObservedAt !== null &&
+        !didNotLook &&
+        !carryForwardFailed;
+
+      return {
+        created: false,
+        heartbeatId: cleanlyObserved ? existing.id : null,
+      };
     }
 
     try {
@@ -596,6 +662,13 @@ export class GithubEvidenceRepository {
            */
           resumeImportId: null,
           ...next,
+          /*
+           * Included on CREATE, where null is the correct value: a row
+           * first written by a run that did not look has never been
+           * observed, and saying so is more useful than pretending the
+           * insert was a verification.
+           */
+          lastObservedAt: input.lastObservedAt,
         },
         /*
          * Identity is not in this payload. A rename - same numeric
@@ -604,10 +677,22 @@ export class GithubEvidenceRepository {
          * of orphaning the old row and inserting a second one. That is
          * the entire reason externalId is built from the immutable id.
          */
-        update: merged,
+        /*
+         * lastObservedAt is spread in only when this run actually
+         * observed. Writing it unconditionally would set it to null on
+         * every unobserved run - erasing a true "last verified" and
+         * replacing it with "never", which is worse than the staleness it
+         * would be trying to report.
+         */
+        update: {
+          ...merged,
+          ...(input.lastObservedAt !== null
+            ? { lastObservedAt: input.lastObservedAt }
+            : {}),
+        },
       });
 
-      return { created: existing === null };
+      return { created: existing === null, heartbeatId: null };
     } catch (error) {
       if (!isUniqueViolation(error)) {
         throw error;
@@ -666,15 +751,33 @@ export class GithubEvidenceRepository {
         : next;
 
       if (isUnchanged(winner, recovered)) {
-        return { created: false };
+        /*
+         * The concurrent winner wrote exactly what we would have. Our
+         * observation is still an observation, so it earns a heartbeat on
+         * the same terms as any other unchanged row.
+         */
+        const cleanlyObserved =
+          input.lastObservedAt !== null &&
+          !didNotLook &&
+          !wouldEraseKnownCount(winner.metadata, next.metadata);
+
+        return {
+          created: false,
+          heartbeatId: cleanlyObserved ? winner.id : null,
+        };
       }
 
       await this.prisma.evidence.update({
         where: { id: winner.id },
-        data: recovered,
+        data: {
+          ...recovered,
+          ...(input.lastObservedAt !== null
+            ? { lastObservedAt: input.lastObservedAt }
+            : {}),
+        },
       });
 
-      return { created: false };
+      return { created: false, heartbeatId: null };
     }
   }
 
@@ -699,6 +802,8 @@ export class GithubEvidenceRepository {
     let created = 0;
     let updated = 0;
 
+    const heartbeat: string[] = [];
+
     for (const input of inputs) {
       const result = await this.persist(
         userId,
@@ -709,6 +814,44 @@ export class GithubEvidenceRepository {
         created += 1;
       } else {
         updated += 1;
+      }
+
+      if (result.heartbeatId !== null) {
+        heartbeat.push(result.heartbeatId);
+      }
+    }
+
+    /*
+     * One statement for the whole run, however many repositories were
+     * unchanged.
+     *
+     * The alternative - an update per repository - would reintroduce the
+     * churn the no-churn guard was built to remove: fourteen round trips
+     * a sync, every sync, to record that nothing happened. Batching keeps
+     * the cost of telling the truth about freshness proportional to the
+     * run rather than to the account size.
+     *
+     * Every row in a run shares the run's scannedAt, because that is what
+     * the projection stamps them with, so a single value is correct for
+     * all of them.
+     *
+     * `data` names exactly one column. capturedAt, occurredAt, metadata,
+     * title, description, sourceUrl and externalId are all absent, which
+     * is what makes this a heartbeat rather than a write: the evidence is
+     * untouched and only the claim about when we last confirmed it moves.
+     * (updatedAt advances, as Prisma stamps it on any update - no read
+     * path orders by it, which was checked before this was written.)
+     */
+    if (heartbeat.length > 0) {
+      const observedAt = inputs.find(
+        (input) => input.lastObservedAt !== null,
+      )?.lastObservedAt;
+
+      if (observedAt !== undefined && observedAt !== null) {
+        await this.prisma.evidence.updateMany({
+          where: { id: { in: heartbeat } },
+          data: { lastObservedAt: observedAt },
+        });
       }
     }
 

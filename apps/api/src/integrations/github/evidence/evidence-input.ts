@@ -65,4 +65,60 @@ export type EvidenceInput = {
    * unestablished - never zero.
    */
   metadata: Record<string, unknown>;
+
+  /*
+   * -------------------------------------------------------------------
+   * THE EVIDENCE RELIABILITY CONTRACT
+   * -------------------------------------------------------------------
+   * Declared by the producer rather than inferred by a consumer. Phase 7
+   * already HELD every one of these properties - it simply had nowhere to
+   * write them down except a metadata blob only this adapter can read.
+   *
+   * They are stated as literal types rather than the wider enums, so this
+   * projection cannot accidentally emit a weaker or stronger claim than
+   * GitHub actually supports: `attribution: 'WEAK_MATCH'` would not
+   * compile here, and neither would `completeness: 'COMPLETE'`.
+   */
+
+  /** We called GitHub's API under the user's authorization and read it. */
+  authenticity: 'DIRECT_API_OBSERVATION';
+
+  /*
+   * GitHub itself resolved the artifact to the authenticated ACCOUNT by
+   * numeric id. See observations/attribution.ts, which refuses git author
+   * email, login, repository ownership and name similarity - so this is a
+   * statement of what already happens, not a new promise.
+   */
+  attribution: 'AUTHENTICATED_ACCOUNT';
+
+  /*
+   * COMPLETE is deliberately not in this union. GitHub's repository
+   * endpoints expose only the default branch, so no run this producer can
+   * make establishes complete coverage - and a type that cannot express
+   * COMPLETE cannot drift into claiming it.
+   */
+  completeness: 'PARTIAL' | 'NOT_SCANNED' | 'ACCESS_LOST';
+
+  /*
+   * When this repository was SUCCESSFULLY re-observed, or null.
+   *
+   * Null is the load-bearing value. It means this run did not establish
+   * the observation - it was skipped for budget, access was lost, or a
+   * dimension of its activity failed to be read - and the persistence
+   * layer must then leave any earlier, truthful value alone rather than
+   * advancing it. A heartbeat that fires on an unsuccessful run turns
+   * "the sync process ran" into "this evidence was verified", which is
+   * the precise lie this column exists to prevent.
+   */
+  lastObservedAt: Date | null;
+
+  /** Which projection produced the row, so a change is detectable. */
+  transformVersion: number;
+
+  /*
+   * The source INSTANCE: one authenticated account, not one repository.
+   * Fourteen repositories share this value, because they are fourteen
+   * observations of one source.
+   */
+  independenceKey: string | null;
 };

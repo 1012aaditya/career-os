@@ -700,6 +700,18 @@ describe('7.4 persistence boundary', () => {
 
       expect(upsertCalls).toHaveLength(1);
 
+      /*
+       * The complete set of columns this producer may write. Anything
+       * else in the payload fails the test, which is what makes this an
+       * allowlist rather than a spot-check - a field added upstream
+       * arrives here for a decision instead of slipping into the row.
+       *
+       * The six reliability-contract columns were added deliberately in
+       * PR-6/Commit 4. None of them can carry free text from a source:
+       * three are literal-typed enums, transformVersion is a number, and
+       * independenceKey is built from a numeric account id that
+       * independence.ts refuses unless it is digits.
+       */
       const allowed = new Set([
         'userId',
         'sourceType',
@@ -711,6 +723,12 @@ describe('7.4 persistence boundary', () => {
         'occurredAt',
         'capturedAt',
         'metadata',
+        'authenticity',
+        'attribution',
+        'completeness',
+        'lastObservedAt',
+        'transformVersion',
+        'independenceKey',
       ]);
 
       const args = upsertCalls[0]!;

@@ -27,6 +27,7 @@ import type {
   SyncObservation,
 } from '../observations/types.js';
 import type { EvidenceInput } from './evidence-input.js';
+import { independenceKeyFor } from '../../../evidence/independence.js';
 
 /*
  * How many language names the prose lists before it stops counting them
@@ -375,6 +376,75 @@ function freezeMetadata(
 }
 
 /**
+ * Which projection produced a row.
+ *
+ * Bumped whenever the shape or meaning of what this file emits changes,
+ * so a row written by an older projection is findable and re-derivable
+ * rather than silently mixed in with current ones.
+ */
+export const EVIDENCE_TRANSFORM_VERSION = 1;
+
+/*
+ * The two completeness states that mean we did NOT successfully observe
+ * this repository on this run. Named here to match the persistence
+ * layer's NON_OBSERVING set, which gates the merge for the same reason.
+ */
+const NOT_OBSERVED = new Set(['NOT_SCANNED', 'ACCESS_LOST']);
+
+/**
+ * GitHub's three-value completeness, widened into the universal enum.
+ *
+ * DEFAULT_BRANCH_ONLY becomes PARTIAL because that is exactly what it
+ * means: the repository WAS scanned, and the counts are lower bounds
+ * since only the default branch is visible through that endpoint. It does
+ * not become COMPLETE, and the input type makes COMPLETE unrepresentable
+ * here so it cannot start doing so.
+ */
+function contractCompleteness(
+  commits: string,
+): 'PARTIAL' | 'NOT_SCANNED' | 'ACCESS_LOST' {
+  if (commits === 'NOT_SCANNED') {
+    return 'NOT_SCANNED';
+  }
+
+  if (commits === 'ACCESS_LOST') {
+    return 'ACCESS_LOST';
+  }
+
+  return 'PARTIAL';
+}
+
+/**
+ * When this repository was SUCCESSFULLY re-observed, or null.
+ *
+ * Two conditions, and the second is the subtle one.
+ *
+ * The repository must have been scanned at all - NOT_SCANNED and
+ * ACCESS_LOST are not observations.
+ *
+ * AND the run's cross-repository authored-activity query must have
+ * succeeded. It runs once per sync and supplies every repository's pull
+ * request and issue counts, so when it fails each repository was listed
+ * and yet part of its activity was never established. Heartbeating then
+ * would record "verified" over evidence a whole dimension of which we
+ * failed to read - the run happened, the observation did not.
+ */
+function observedAt(
+  repo: RepositoryObservation,
+  sync: SyncObservation,
+): Date | null {
+  if (NOT_OBSERVED.has(repo.completeness.commits)) {
+    return null;
+  }
+
+  if (!sync.completeness.authoredActivityEstablished) {
+    return null;
+  }
+
+  return syncCapturedAt(sync);
+}
+
+/**
  * Projects one repository observation into one Evidence input.
  *
  * The sync is passed alongside the repository because two facts about
@@ -494,6 +564,8 @@ export function projectRepositoryEvidence(
     },
   });
 
+
+
   return {
     sourceType: 'GITHUB',
 
@@ -516,6 +588,34 @@ export function projectRepositoryEvidence(
     occurredAt: repositoryOccurredAt(repo),
     capturedAt: syncCapturedAt(sync),
     metadata,
+
+    /*
+     * The reliability contract, declared rather than inferred.
+     *
+     * authenticity and attribution are constants because they are
+     * properties of HOW this producer works, not of any particular
+     * repository: every row here came from GitHub's API under the user's
+     * authorization, and observations/attribution.ts already refuses to
+     * attribute anything GitHub did not resolve to the authenticated
+     * account by numeric id.
+     */
+    authenticity: 'DIRECT_API_OBSERVATION',
+    attribution: 'AUTHENTICATED_ACCOUNT',
+    completeness: contractCompleteness(repo.completeness.commits),
+    lastObservedAt: observedAt(repo, sync),
+    transformVersion: EVIDENCE_TRANSFORM_VERSION,
+
+    /*
+     * Built from the account id, never the login. A login is mutable and
+     * re-assignable, so keying independence on it would split one source
+     * in two on a rename and merge two people into one on a
+     * re-registration. Fourteen repositories therefore share one key -
+     * they are fourteen observations of a single source.
+     */
+    independenceKey: independenceKeyFor({
+      kind: 'github',
+      authenticatedAccountId: sync.account.accountId,
+    }),
   };
 }
 

@@ -946,6 +946,22 @@ describe('completeness at the Evidence boundary', () => {
 
       boundary.row(970).updatedAt = sentinel;
 
+      /*
+       * Everything the observation consists of, snapshotted before the
+       * re-sync so the assertion below is about the WHOLE row rather than
+       * the handful of fields somebody remembered to check.
+       */
+      const before = {
+        capturedAt: boundary.row(970).capturedAt,
+        occurredAt: boundary.row(970).occurredAt,
+        title: boundary.row(970).title,
+        description: boundary.row(970).description,
+        sourceUrl: boundary.row(970).sourceUrl,
+        externalId: boundary.row(970).externalId,
+        metadata: JSON.stringify(boundary.row(970).metadata),
+        completeness: boundary.row(970).completeness,
+      };
+
       const again = await boundary.sync(scenario);
 
       expect(again.persisted).toEqual({
@@ -954,8 +970,40 @@ describe('completeness at the Evidence boundary', () => {
       });
       expect(boundary.store.rows.evidence).toHaveLength(1);
 
-      /* Nothing changed, so nothing was written. */
-      expect(boundary.row(970).updatedAt).toEqual(sentinel);
+      /*
+       * The observation is untouched. Since PR-6's approved exception the
+       * row is no longer completely inert on an unchanged run - the
+       * freshness heartbeat advances lastObservedAt, because "unchanged"
+       * and "unverified" are different facts and the row previously could
+       * not tell them apart.
+       *
+       * What the no-churn guard still guarantees, and what this asserts,
+       * is that the heartbeat moves ONLY that. capturedAt in particular
+       * must not move: the evidence sheet orders by it, so re-stamping it
+       * would reorder a user's evidence every time a sync confirmed
+       * nothing had happened.
+       */
+      const row = boundary.row(970);
+
+      expect(row.capturedAt).toEqual(before.capturedAt);
+      expect(row.occurredAt).toEqual(before.occurredAt);
+      expect(row.title).toEqual(before.title);
+      expect(row.description).toEqual(before.description);
+      expect(row.sourceUrl).toEqual(before.sourceUrl);
+      expect(row.externalId).toEqual(before.externalId);
+      expect(JSON.stringify(row.metadata)).toEqual(before.metadata);
+      expect(row.completeness).toEqual(before.completeness);
+
+      /* The heartbeat did fire, and it is the only reason the row moved. */
+      expect(row.updatedAt).not.toEqual(sentinel);
+      expect(row.lastObservedAt).not.toBeNull();
+
+      expect(boundary.store.calls.evidenceUpdateMany).toHaveLength(1);
+      expect(
+        Object.keys(
+          boundary.store.calls.evidenceUpdateMany[0]!.data,
+        ),
+      ).toEqual(['lastObservedAt']);
     });
   });
 });

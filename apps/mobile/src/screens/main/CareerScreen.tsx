@@ -1,3 +1,4 @@
+import { useNavigation } from '@react-navigation/native';
 import { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -106,6 +107,9 @@ import {
 const NODE_LABEL_FONT_SIZE = 10;
 
 export function CareerScreen() {
+  const navigation = useNavigation<{
+    navigate: (screen: string) => void;
+  }>();
   const [graph, setGraph] = useState<CareerGraph | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -293,6 +297,35 @@ export function CareerScreen() {
             snapshot={snapshot}
           />
         ) : null}
+
+        {/*
+          The way into the Evidence layer.
+          
+          Placed inside Career rather than given a tab of its own: evidence
+          is the proof underneath the career graph, not a seventh
+          destination competing with it. The existing five tabs are
+          untouched.
+        */}
+        <Pressable
+          onPress={() => navigation.navigate('Evidence')}
+          accessibilityRole="button"
+          style={({ pressed }) => [
+            styles.evidenceLink,
+            pressed && styles.evidenceLinkPressed,
+          ]}
+        >
+          <View style={styles.evidenceLinkText}>
+            <AppText variant="bodyMedium">Evidence</AppText>
+            <AppText variant="caption" muted>
+              What backs your career, where it came from, and how well it is
+              known.
+            </AppText>
+          </View>
+
+          <AppText variant="body" muted>
+            ›
+          </AppText>
+        </Pressable>
 
         <Card>
           <View style={styles.graphHeader}>
@@ -2464,6 +2497,24 @@ function truncate(
 }
 
 const styles = StyleSheet.create({
+  evidenceLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    padding: spacing.md,
+  },
+  evidenceLinkPressed: {
+    backgroundColor: colors.muted,
+  },
+  evidenceLinkText: {
+    flex: 1,
+    gap: 2,
+  },
   content: {
     gap: spacing.lg,
     paddingBottom: spacing.xl,

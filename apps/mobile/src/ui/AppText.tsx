@@ -1,5 +1,10 @@
 import type { ReactNode } from 'react';
-import { StyleSheet, Text, type TextStyle } from 'react-native';
+import {
+  StyleSheet,
+  Text,
+  type StyleProp,
+  type TextStyle,
+} from 'react-native';
 import { colors, typography } from './theme';
 
 type Variant = keyof typeof typography;
@@ -8,7 +13,14 @@ type AppTextProps = {
   children: ReactNode;
   variant?: Variant;
   muted?: boolean;
-  style?: TextStyle;
+  /*
+   * StyleProp rather than a bare TextStyle, so a caller can compose - a
+   * base style plus a conditional one - which is how every other React
+   * Native component behaves. The value is already spread into an array
+   * below, so this widens the type to what the implementation always
+   * accepted and changes nothing for existing callers.
+   */
+  style?: StyleProp<TextStyle>;
   /**
    * Truncates instead of wrapping.
    *

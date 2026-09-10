@@ -19,6 +19,14 @@ export default defineConfig({
     environment: 'node',
     include: [
       'src/career/**/*.test.ts',
+      /*
+       * The Evidence layer's presentation logic, pure for exactly the
+       * reason the others are: it decides what the reliability contract
+       * SAYS - what NOT_SCANNED is allowed to be called, what a strength
+       * class may never imply, which timestamps exist - and every one of
+       * those is a claim about honesty rather than about layout.
+       */
+      'src/evidence/**/*.test.ts',
       'src/github/**/*.test.ts',
       /*
        * Market Search's presentation logic. Pure for the same reason the

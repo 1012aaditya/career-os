@@ -8,6 +8,7 @@ import {
 import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service.js';
+import { independenceKeyFor } from '../evidence/independence.js';
 
 type ResumeExtraction = {
   extraction?: {
@@ -57,6 +58,18 @@ type ResumeExtraction = {
     }>;
   };
 };
+
+/**
+ * Which resume projection produced an Evidence row.
+ *
+ * Versioned per PRODUCER rather than globally. The number answers "which
+ * transformation wrote this row", and the resume projection changes for
+ * entirely different reasons than the GitHub one - so sharing a counter
+ * would mean a change to GitHub's projection implied every resume row had
+ * been rewritten too, which is exactly the question this field exists to
+ * answer honestly.
+ */
+const RESUME_EVIDENCE_TRANSFORM_VERSION = 1;
 
 @Injectable()
 export class CareerGraphIngestionService {
@@ -667,6 +680,19 @@ export class CareerGraphIngestionService {
          * ------------------------------------------------------
          */
 
+        /*
+         * One instant, written to both capturedAt and lastObservedAt.
+         *
+         * capturedAt was previously left to the column default. It is
+         * stated here so the two columns are equal BY CONSTRUCTION rather
+         * than by two clocks agreeing: `now()` inside a transaction is the
+         * transaction's start time, so a default-generated capturedAt and
+         * an application-generated lastObservedAt would differ by however
+         * long the ingestion took. The meaning of capturedAt is unchanged
+         * - it is still when we captured the artifact.
+         */
+        const capturedAt = new Date();
+
         const evidence =
           await tx.evidence.create({
             data: {
@@ -682,6 +708,77 @@ export class CareerGraphIngestionService {
                 resumeImportId:
                   resumeImport.id,
               },
+              capturedAt,
+
+              /*
+               * ----------------------------------------------------
+               * THE EVIDENCE RELIABILITY CONTRACT
+               * ----------------------------------------------------
+               * What a resume actually is, stated plainly.
+               *
+               * A resume is a document a person wrote about themselves.
+               * That makes it a CLAIM, attributed because the user said
+               * so - not a judgement about the person, but an accurate
+               * description of the artifact. It is currently the only
+               * evidence the Career Graph consumes, which is precisely
+               * why the row has to say so out loud rather than let a
+               * consumer infer strength from the fact that it exists.
+               *
+               * MODEL_INTERPRETATION was considered and rejected. The
+               * extraction is a model reading a document, but what the
+               * row attests is the DOCUMENT, and the user confirmed the
+               * extracted content before this code ever runs. USER_CLAIM
+               * is the honest description of what was confirmed; calling
+               * it a model interpretation would attribute the person's
+               * own statement to a machine.
+               */
+              authenticity: 'USER_CLAIM',
+              attribution: 'USER_ASSERTED',
+
+              /*
+               * UNKNOWN, not COMPLETE. Nothing about a resume import
+               * establishes how much of a career it covers, and COMPLETE
+               * would assert that a two-page document is the whole of a
+               * working life. Under the approved precedence this still
+               * classifies as WEAK rather than UNVERIFIED, because a
+               * resume was never scanned at all - its completeness is
+               * inapplicable, not failed.
+               */
+              completeness: 'UNKNOWN',
+
+              /*
+               * Equal to capturedAt, and it will never advance.
+               *
+               * A resume is observed exactly once, at confirmation, and
+               * is never re-consulted - there is no source to re-read. So
+               * the moment of capture IS the last verification, and there
+               * is deliberately no resume heartbeat. This does NOT say
+               * the claims inside were verified; it says when the
+               * artifact was taken in.
+               */
+              lastObservedAt: capturedAt,
+
+              transformVersion:
+                RESUME_EVIDENCE_TRANSFORM_VERSION,
+
+              /*
+               * The IMPORT is the source instance. One resume is one
+               * independent source however many skills, projects,
+               * experiences and achievements were extracted from it -
+               * which is what stops forty EvidenceSkill joins reading as
+               * forty corroborating witnesses.
+               *
+               * Built from the import id and nothing else. Deriving it
+               * from an extracted name, email, employer or the file's
+               * contents would let a document's text decide how
+               * independent it is, and two people who listed the same
+               * employer would silently share a source.
+               */
+              independenceKey: independenceKeyFor({
+                kind: 'resume',
+                resumeImportId:
+                  resumeImport.id,
+              }),
             },
           });
 

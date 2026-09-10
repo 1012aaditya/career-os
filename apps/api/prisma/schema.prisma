@@ -34,6 +34,93 @@ enum EvidenceSourceType {
   OTHER
 }
 
+/**
+ * ---------------------------------------------------------------------
+ * EVIDENCE RELIABILITY CONTRACT
+ * ---------------------------------------------------------------------
+ * Three enums and six columns that let an Evidence row answer HOW it is
+ * known, not merely WHAT it says.
+ * They are columns rather than metadata keys for one reason: metadata is
+ * a per-producer convention and cannot be enforced. Phase 7 already
+ * established every one of these properties for GitHub - attribution by
+ * numeric account id, completeness that refuses to render as zero - but
+ * it established them INSIDE a JSON blob that only the GitHub adapter
+ * understands. A consumer joining evidence therefore could not tell an
+ * authenticated API observation from a line somebody typed into a resume
+ * except by switching on sourceType, which is a source label and not a
+ * trust property.
+ * Every default below is the WEAKEST value in its enum. A producer that
+ * forgets to declare is classified as an unverified user claim rather
+ * than silently inheriting somebody else's credibility.
+ */
+
+/// How directly the information came from the thing it describes.
+///
+/// Ordered strongest to weakest, and the order is load-bearing: nothing
+/// may promote a row up this list.
+enum EvidenceAuthenticity {
+  /// We called the source's own API under the user's authorization and
+  /// read what it returned. GitHub repository evidence is this.
+  DIRECT_API_OBSERVATION
+  /// An artifact whose origin we verified by structure or signature.
+  VERIFIED_ARTIFACT
+  /// A file the user supplied. The file is real; its CONTENTS are the
+  /// user's account of themselves and are not independently checked.
+  USER_PROVIDED_ARTIFACT
+  /// The user asserted it. A resume is this: a document a person wrote
+  /// about themselves, which is a claim and not an observation.
+  USER_CLAIM
+  /// Produced by a model transforming one of the above. Weakest on
+  /// purpose - an extraction can hallucinate a skill that no source
+  /// contained, so it must never outrank the thing it read.
+  MODEL_INTERPRETATION
+}
+
+/// Why we believe this belongs to THIS user.
+///
+/// The distinction that matters most is the bottom entry. Name, email and
+/// handle similarity prove nothing: anyone can set a git author email to
+/// anyone's address, and two people sharing a machine share a signature.
+enum EvidenceAttribution {
+  /// The source itself linked the artifact to the authenticated account,
+  /// by immutable id. See integrations/github/observations/attribution.ts.
+  AUTHENTICATED_ACCOUNT
+  /// Ownership of the origin was proven out of band - a DNS record, a
+  /// verification file - rather than asserted.
+  VERIFIED_OWNERSHIP
+  /// The source names the account as the author, without us holding a
+  /// credential for that account.
+  EXPLICIT_AUTHORSHIP
+  /// The user told us it was theirs.
+  USER_ASSERTED
+  /// A name, email or handle looked similar. This is not attribution. It
+  /// is recorded so it can be excluded, and it must never be promoted.
+  WEAK_MATCH
+}
+
+/// How much of what we set out to observe we actually saw.
+///
+/// The reason this is an enum and not a boolean is the middle three
+/// values. "We did not look" and "we lost access" are not "there is
+/// nothing there", and a consumer that renders either as zero converts a
+/// gap in OUR coverage into a statement about a person's career.
+enum EvidenceCompleteness {
+  /// The full scope was observed.
+  COMPLETE
+  /// Observed, but bounded. Counts are LOWER BOUNDS. GitHub's
+  /// DEFAULT_BRANCH_ONLY is this: real work on other branches is
+  /// invisible through that endpoint.
+  PARTIAL
+  /// Not looked at - a budget or page ceiling was reached. NOT zero.
+  NOT_SCANNED
+  /// Reachable before, not now. What was captured stays captured and is
+  /// marked stale rather than deleted.
+  ACCESS_LOST
+  /// Coverage was never established. The honest default for a producer
+  /// that does not model coverage at all, such as a resume.
+  UNKNOWN
+}
+
 /// Which external system an ExternalConnection speaks to. Separate from
 /// EvidenceSourceType, which describes where a piece of evidence came from:
 /// a source can produce evidence without us ever holding a connection to it
@@ -268,6 +355,44 @@ model Evidence {
   capturedAt     DateTime           @default(now())
   metadata       Json?
 
+  /// See the EVIDENCE RELIABILITY CONTRACT block above for why these are
+  /// columns and why every default is the weakest value.
+  authenticity EvidenceAuthenticity @default(USER_CLAIM)
+  attribution  EvidenceAttribution  @default(USER_ASSERTED)
+  completeness EvidenceCompleteness @default(UNKNOWN)
+
+  /// When the source was last successfully consulted about THIS row,
+  /// whether or not anything had changed.
+  ///
+  /// Distinct from capturedAt, which moves only when the observation
+  /// itself moved. Without this column the system can say when evidence
+  /// last CHANGED and cannot say when it was last CONFIRMED - so a
+  /// repository verified an hour ago and one not looked at since January
+  /// are indistinguishable, and "last verified" is unanswerable.
+  ///
+  /// Nullable because it is a claim of successful observation: a failed
+  /// sync, a lost credential and a repository skipped for budget must all
+  /// leave it alone rather than advance it.
+  lastObservedAt DateTime?
+
+  /// Which projection produced this row, so a normalization change is
+  /// detectable and rows can be re-derived. 0 means "written before the
+  /// contract existed" and is therefore itself a finding.
+  transformVersion Int @default(0)
+
+  /// Identifies the SOURCE INSTANCE, so corroboration counts independent
+  /// sources instead of counting rows.
+  ///
+  /// One resume import is one key however many joins it produced; one
+  /// authenticated GitHub account is one key across every repository. The
+  /// Phase 6 freeze warns that scoring the Evidence joins would be
+  /// "counting imports rather than facts" - this column is what makes
+  /// that mistake structurally unavailable, because volume within a key
+  /// can never become independence across keys.
+  ///
+  /// Producer-derived and never client-supplied.
+  independenceKey String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -293,6 +418,9 @@ model Evidence {
   @@index([userId, sourceType])
   @@index([userId, capturedAt])
   @@index([resumeImportId])
+  /// Corroboration asks "how many distinct sources", which is a scan of
+  /// one user's keys.
+  @@index([userId, independenceKey])
 }
 
 model Goal {
@@ -825,11 +953,11 @@ model MarketSource {
   ///
   /// Defaults to DISCOVERED - the state that grants nothing - so a row
   /// inserted by any path at all is unusable until somebody moves it.
-  accessState       MarketSourceAccessState @default(DISCOVERED)
+  accessState      MarketSourceAccessState @default(DISCOVERED)
   /// Why the source is in that state. Internal, and never served: it
   /// records partnership status, refusals and what was asked of whom.
-  accessNote        String?
-  accessReviewedAt  DateTime?
+  accessNote       String?
+  accessReviewedAt DateTime?
 
   /// Whether this source needs a credential to be reached at all.
   ///

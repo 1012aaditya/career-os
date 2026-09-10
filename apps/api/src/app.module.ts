@@ -12,6 +12,7 @@ import { ConfigModule } from '@nestjs/config';
 import { ResumeProcessingModule } from './resume-processing/resume-processing.module.js';
 import { AccountModule } from './account/account.module.js';
 import { AuthModule } from './auth/auth.module.js';
+import { EvidenceModule } from './evidence/evidence.module.js';
 import { HealthModule } from './health/health.module.js';
 import { ObservabilityModule } from './observability/observability.module.js';
 import { AllExceptionsFilter } from './observability/all-exceptions.filter.js';
@@ -57,6 +58,7 @@ import { StructuredLogger } from './observability/structured-logger.js';
     ResumeImportModule,
     ResumeProcessingModule,
     CareerGraphModule,
+    EvidenceModule,
     IntegrationsModule,
     MarketGraphModule,
   ],

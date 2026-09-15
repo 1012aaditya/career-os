@@ -226,68 +226,100 @@ foreign keys, 7 CHECK constraints, 146 indexes, 11 migrations. This now
 runs on every CI run against a real Postgres service container, so it
 cannot silently rot.
 
-### Storage backup: mechanism written, drill NOT performed
+### Storage backup: RUN, and the restore drill PERFORMED
 
-`src/operations/storage-backup.ts` and `storage-backup.cli.ts` copy the
-`resumes` bucket into a private backup bucket, verifying every object by
-re-reading it and comparing a sha256 the tool computes on both sides -
-rather than trusting the provider's ETag, which for multipart uploads is a
-hash of hashes and differs between byte-identical objects.
+Executed 2026-09-15 against the live Supabase project. The database was
+not touched; this section is entirely about object storage.
 
-Three rules are enforced in code and covered by tests that need no provider:
+**The destination.** A new `resume-backups` bucket, created private, PDF
+only, 10 MB - mirroring `resumes` exactly:
 
-- **The destination must be explicitly private.** An absent or unknown
-  privacy flag is refused. A backup of every resume is one URL away from
-  being the whole corpus, and publishing it cannot be undone by changing
-  the flag back afterwards.
-- **Nothing is ever deleted from the backup** because it vanished from the
-  source. A backup that mirrors deletions faithfully reproduces the
-  accident it exists to protect against.
-- **A mismatched copy is a hard failure**, not a warning. An object that
-  does not match its source is worse than a missing one: a missing object
-  is a known gap, a wrong one is a restore that succeeds and returns the
-  wrong file.
+```
+career-files     public=false  size=none      mime=any
+resumes          public=false  size=10485760  mime=application/pdf
+resume-backups   public=false  size=10485760  mime=application/pdf
+```
 
-**The live drill has NOT been run.** The Career OS Supabase project is not
-reachable from this machine, so this code has never touched the `resumes`
-bucket. Do not treat resume files as backed up until the drill below has
-actually been performed:
+**The backup.** `src/operations/storage-backup.cli.ts`, unmodified, first
+real execution:
 
-1. Create a private backup bucket in the production project.
-2. Run the CLI. Confirm the reported count equals the object count.
-3. Copy one test object's bytes out, delete it from the source.
-4. Restore it from the backup.
-5. Compare sha256 of the restored bytes against the original.
-6. Confirm the restored object is not publicly readable.
+```
+run 1:  resumes -> resume-backups: 8 copied, 0 unchanged, 0 failed, 8 total
+run 2:  resumes -> resume-backups: 0 copied, 8 unchanged, 0 failed, 8 total
+```
 
-Use a synthetic object. Do not delete a real user's resume to test a
-restore.
+Run 2 proves the copy is incremental by content rather than re-uploading
+every file on every run. `0 failed` is the load-bearing number: every
+object was re-read after writing and compared against a sha256 the tool
+computes on both sides, and a mismatch throws rather than warning.
+
+**Fail-closed, demonstrated.** Pointed at a bucket it could not confirm
+was private:
+
+```
+Backup bucket "does-not-exist" is missing or not private. Refusing to copy.
+```
+
+**The restore drill.** A synthetic PDF, never a user's file:
+
+| Step | Result |
+|---|---|
+| 1. Upload synthetic PDF to `resumes` | present |
+| 2. Copy to backup, verify written bytes | sha256 == source |
+| 3. **Delete from source** | verified absent |
+| 4. Restore from backup | present again, **sha256 == original** |
+| 5. Privacy of restored object | unauthenticated fetch -> **400** |
+| 6. Cleanup | both buckets clean |
+
+Afterwards: `resumes` 8 files, `resume-backups` 8 files. No real object
+was deleted at any point.
+
+**One thing the drill itself taught.** The first run verified deletion
+with `download()` and reported the object still present. It was not -
+Supabase serves storage through a CDN, which kept answering from cache
+for a moment after the delete. `list()` reads the authoritative record.
+The drill was re-run with list-based checks, because a deletion check
+that races a cache is exactly the check that would report a successful
+restore over an object that had never gone away.
+
+### What this protects against, and what it does not
+
+**Protects:** an accidental delete, a bad migration, a bug that removes
+the wrong prefix, a user deleting their own file by mistake.
+
+**Does NOT protect:** losing the Supabase project or the account. Source
+and backup are two buckets in ONE project - the same blast radius. Real
+off-site recovery needs a second destination and is an infrastructure
+decision, not a code one.
+
+Stated plainly because "we have backups" is exactly the sentence that
+stops people asking where they are.
 
 ### RPO and RTO
 
 | | Database | Resume files |
 |---|---|---|
-| RPO | **Unestablished.** No schedule exists; PITR availability on the production plan is unread. | **Unbounded** until the backup runs on a schedule. |
-| RTO | ~35s restore for a 210 MB dump, plus provisioning and repointing. Call it under an hour, measured on a laptop against a local database. | Unmeasured. |
+| RPO | **Unestablished.** No schedule exists; PITR availability on the production plan is unread. | **Since the last manual run.** The CLI is not scheduled, so today the answer is "whenever somebody last ran it" - currently 2026-09-15. |
+| RTO | ~35s restore for a 210 MB dump, plus provisioning and repointing. Under an hour, measured on a laptop against a local database. | **Seconds per file, measured.** A single object restored and byte-verified inside one drill run. A full-bucket restore of 8 files is the same operation repeated. |
+| Retention | None configured. | **None configured.** The backup never deletes, so it grows and keeps everything - including objects deleted at source, which is deliberate (a backup that mirrors deletions reproduces the accident). |
 
-These are honest gaps, not estimates dressed up as numbers. Both become
-measurable once a production project exists.
+The remaining honest gap is scheduling. A backup somebody remembers to
+run is not a backup strategy, and until the CLI runs on a schedule the
+RPO is a human habit rather than a number.
 
 ---
 
 ## Still open after PR-6
 
-1. Create the production Supabase project in US East. Everything below
-   depends on it, and it needs an account this machine cannot reach.
-2. Confirm PITR availability and retention on the production plan with a
+1. **Schedule the storage backup.** It works and it is not automated. Until
+   it runs on a timer the RPO is a human habit.
+2. Create the production Supabase project in US East. Everything below
+   depends on it.
+3. Confirm PITR availability and retention on the production plan with a
    management token, and record the actual numbers.
-3. Run the storage backup drill above, end to end, and record the result.
-4. Schedule both backups. A `pg_dump` somebody remembers to run is not a
-   backup strategy, and neither is a CLI nobody invokes.
-5. Decide on `career-files` - private, but with no size or MIME limit and
-   no application code referencing it. Inspect it in a real project before
-   constraining or removing it.
-6. Put the backup destination somewhere that survives losing the Supabase
-   project. Today's design copies bucket-to-bucket within one project: it
-   survives an accidental delete, and it does not survive losing the
-   account.
+4. Schedule the database backup too. A `pg_dump` somebody remembers to run
+   is not a backup strategy.
+5. Give the storage backup a destination outside the project. Today source
+   and backup share one account, so they share one blast radius.
+6. Decide on `career-files` - private, but with no size or MIME limit and
+   no application code referencing it.

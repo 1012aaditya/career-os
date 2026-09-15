@@ -16,6 +16,7 @@ import {
   strongestEvidence,
 } from './evidence-summary';
 import {
+  FILTERABLE_STRENGTHS,
   STRENGTH_ORDER,
   STRENGTH_SCOPE_NOTE,
   doesNotEstablishStatements,
@@ -102,6 +103,27 @@ describe('strength is described, never scored', () => {
         /%|\/100|\bscore\b|\brating\b|\bout of \d/i,
       );
     }
+  });
+
+  /*
+   * A row is classified by classifyRecord, whose strongest outcome is
+   * STRONG. VERY_STRONG comes only from classify(), which reasons over a
+   * SET - so offering it per-row was an option that could never match.
+   */
+  it('does not offer VERY_STRONG as a per-row filter', () => {
+    expect(FILTERABLE_STRENGTHS).not.toContain('VERY_STRONG');
+    expect(FILTERABLE_STRENGTHS).toEqual([
+      'STRONG',
+      'MODERATE',
+      'WEAK',
+      'UNVERIFIED',
+    ]);
+  });
+
+  /* Ranking still knows about it, so a set-level class sorts correctly. */
+  it('keeps VERY_STRONG in the ranking order', () => {
+    expect(STRENGTH_ORDER[0]).toBe('VERY_STRONG');
+    expect(strengthLabel('VERY_STRONG').label).toBe('Very strong');
   });
 
   it('says plainly that strength is not a verdict on the person', () => {

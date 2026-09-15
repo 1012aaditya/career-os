@@ -60,7 +60,13 @@ export function strengthLabel(trustClass: TrustClass): StrengthLabel {
   return STRENGTH[trustClass];
 }
 
-/** The order strength appears in filters and sorts. Strongest first. */
+/**
+ * Every class, strongest first. Used for RANKING.
+ *
+ * Includes VERY_STRONG because ranking must be able to place it: the API
+ * can return it from a set-level classification, and a rank table missing
+ * a value would sort it as if it were the weakest.
+ */
 export const STRENGTH_ORDER: TrustClass[] = [
   'VERY_STRONG',
   'STRONG',
@@ -68,6 +74,24 @@ export const STRENGTH_ORDER: TrustClass[] = [
   'WEAK',
   'UNVERIFIED',
 ];
+
+/**
+ * The classes a single row can actually have. Used for FILTERING.
+ *
+ * VERY_STRONG is deliberately absent, and the distinction is the API's
+ * rather than a UI preference. A row is classified by classifyRecord,
+ * whose strongest outcome is STRONG; VERY_STRONG comes only from
+ * classify(), which reasons over a SET and adds independent corroboration
+ * to a strong row.
+ *
+ * Offering it as a per-row filter produced an option that could never
+ * match anything - the dead end this file already refuses elsewhere, where
+ * source options are built from the evidence actually present rather than
+ * from every source the product might one day have.
+ */
+export const FILTERABLE_STRENGTHS: TrustClass[] = STRENGTH_ORDER.filter(
+  (trustClass) => trustClass !== 'VERY_STRONG',
+);
 
 const SOURCE_LABELS: Record<string, string> = {
   GITHUB: 'GitHub',

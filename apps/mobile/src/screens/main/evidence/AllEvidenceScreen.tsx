@@ -21,7 +21,7 @@ import {
   type EvidenceFilters,
 } from '../../../evidence/evidence-filters';
 import {
-  STRENGTH_ORDER,
+  FILTERABLE_STRENGTHS,
   strengthLabel,
 } from '../../../evidence/evidence-view';
 import { useEvidence } from '../../../evidence/useEvidence';
@@ -213,7 +213,7 @@ function FilterSheet({
             title="Strength"
             options={[
               { value: null, label: 'All' },
-              ...STRENGTH_ORDER.map((value) => ({
+              ...FILTERABLE_STRENGTHS.map((value) => ({
                 value,
                 label: strengthLabel(value).label,
               })),

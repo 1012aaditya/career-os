@@ -146,6 +146,27 @@ export function isSubmittable(draft: ManualEvidenceDraft): boolean {
   return draftProblems(draft).length === 0;
 }
 
+/**
+ * The problems worth SHOWING, as opposed to the problems that exist.
+ *
+ * An untouched draft is empty, so `draftProblems` rightly reports a
+ * missing kind and a missing title - and the screen rendered both in red
+ * the instant it opened, telling a person they had done something wrong
+ * before they had done anything at all. On a screen about trust that
+ * reads as an accusation.
+ *
+ * Deliberately separate from `draftProblems` rather than folded into it:
+ * `isSubmittable` must keep seeing every problem, so the save control
+ * stays disabled on a pristine form. Hiding a message must never make the
+ * form look submittable.
+ */
+export function visibleProblems(
+  draft: ManualEvidenceDraft,
+  touched: ReadonlySet<keyof ManualEvidenceDraft>,
+): DraftProblem[] {
+  return draftProblems(draft).filter((problem) => touched.has(problem.field));
+}
+
 export type SubmissionState = {
   available: boolean;
   /** Shown before the user invests effort, not after. */

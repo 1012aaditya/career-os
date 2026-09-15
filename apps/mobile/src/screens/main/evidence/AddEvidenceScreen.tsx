@@ -12,9 +12,9 @@ import {
   EMPTY_DRAFT,
   MANUAL_EVIDENCE_DISCLOSURE,
   MANUAL_EVIDENCE_KINDS,
-  draftProblems,
   isSubmittable,
   submissionState,
+  visibleProblems,
   type ManualEvidenceDraft,
 } from '../../../evidence/manual-evidence';
 import {
@@ -44,15 +44,27 @@ export function AddEvidenceScreen() {
   const navigation = useNavigation();
   const [draft, setDraft] = useState<ManualEvidenceDraft>(EMPTY_DRAFT);
 
+  /*
+   * Which fields the person has actually touched. A problem is only shown
+   * once they have been to the field - otherwise an untouched form opens
+   * already in red, telling them they got something wrong before they
+   * typed a character.
+   */
+  const [touched, setTouched] = useState<ReadonlySet<keyof ManualEvidenceDraft>>(
+    () => new Set(),
+  );
+
   const submission = submissionState();
-  const problems = draftProblems(draft);
+  const problems = visibleProblems(draft, touched);
   const ready = isSubmittable(draft);
 
   const problemFor = (field: keyof ManualEvidenceDraft) =>
     problems.find((problem) => problem.field === field)?.message;
 
-  const set = (field: keyof ManualEvidenceDraft, value: string) =>
+  const set = (field: keyof ManualEvidenceDraft, value: string) => {
     setDraft({ ...draft, [field]: value });
+    setTouched((previous) => new Set(previous).add(field));
+  };
 
   return (
     <Screen>
@@ -81,7 +93,10 @@ export function AddEvidenceScreen() {
               return (
                 <Pressable
                   key={kind.value}
-                  onPress={() => setDraft({ ...draft, kind: kind.value })}
+                  onPress={() => {
+                    setDraft({ ...draft, kind: kind.value });
+                    setTouched((previous) => new Set(previous).add('kind'));
+                  }}
                   accessibilityRole="button"
                   accessibilityState={{ selected: active }}
                   style={[styles.kind, active && styles.kindActive]}

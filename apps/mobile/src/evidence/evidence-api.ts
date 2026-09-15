@@ -102,7 +102,14 @@ export async function fetchEvidence(options: {
 
   const query = params.toString();
 
+  /*
+   * No `/v1` here. api/client.ts appends the version to the base URL
+   * already, so a path carrying its own produced /v1/v1/evidence and a
+   * 404 - which only showed up the first time the screen was opened
+   * against a real API. Every other caller passes '/account',
+   * '/career-graph'; this now matches.
+   */
   return await apiRequest<EvidenceList>(
-    query === '' ? '/v1/evidence' : `/v1/evidence?${query}`,
+    query === '' ? '/evidence' : `/evidence?${query}`,
   );
 }

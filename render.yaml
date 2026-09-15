@@ -21,22 +21,29 @@ services:
     dockerfilePath: ./apps/api/Dockerfile
     dockerContext: .
 
-    # US East. The single most important line in this file.
+    # Singapore, because the database is in Sydney and Render has no
+    # Sydney region. The single most important line in this file.
     #
     # PR-6 measured that P2028 is caused by connection HOLD time, and hold
     # time is round trips multiplied by distance: at 250ms RTT an import
     # transaction holds a connection for ~1.9s against a 2s budget, and 29
     # of 40 concurrent imports failed. At ~0ms the same pool absorbed all
-    # 40 with a 94ms median. So the API must sit in the same region as the
-    # database, and the production Supabase project must be created in US
-    # East to match. Co-location is the fix; everything else was measured
-    # and rejected.
+    # 40 with a 94ms median. Co-location is the fix; everything else was
+    # measured and rejected.
     #
-    # VERIFY THE REGION ID on first apply - Render has used both `virginia`
-    # and `ohio` for US East. Either satisfies the requirement; what must
-    # not happen is this service landing in a different region from the
-    # database.
-    region: virginia
+    # THIS IS NOT CO-LOCATION, and the comment should not pretend it is.
+    # The production database is the existing Supabase project in Sydney
+    # (ap-southeast-2), which holds real user data and was migrated in
+    # place rather than recreated. Singapore is the nearest region Render
+    # offers - roughly 100ms away, not the ~250ms that produced the
+    # failures above, but not zero either. The transaction budget below is
+    # widened to match, which is a mitigation and not a fix.
+    #
+    # The fix, when it is worth the data move, is a Supabase project in a
+    # region Render also serves. Until then this line and DATABASE_URL must
+    # be changed together: an API in Singapore pointed at a US East
+    # database is the exact configuration PR-6 measured as failing.
+    region: singapore
 
     plan: starter
 
@@ -93,6 +100,24 @@ services:
       - key: DATABASE_APPLICATION_NAME
         value: career-os-api
 
+      # The mitigation for the distance described at `region` above.
+      #
+      # maxWait is what P2028 reports: the time a transaction will wait for
+      # a free connection before giving up. The 2s default was measured
+      # against a CO-LOCATED database. At ~100ms RTT an import holds a
+      # connection appreciably longer, so a queue that would have drained
+      # inside 2s no longer does.
+      #
+      # PR-6 measured that raising maxWait alone does not rescue a 250ms
+      # deployment - 21 of 40 still failed, and the failures merely moved
+      # from P2028 to the statement timeout. These numbers are therefore
+      # sized for ~100ms and are a starting point to be checked against
+      # real import latency, not a substitute for co-location.
+      - key: DATABASE_TRANSACTION_MAX_WAIT_MS
+        value: '8000'
+      - key: DATABASE_TRANSACTION_TIMEOUT_MS
+        value: '15000'
+
       # Shared rate-limit counter. Without it, each instance counts on its
       # own and the limits in throttling.ts are silently multiplied by the
       # instance count.
@@ -143,7 +168,9 @@ services:
   # entirely is survivable: the limiter degrades to per-process counting.
   - type: keyvalue
     name: career-os-throttle
-    region: virginia
+    # Beside the API, not beside the database - every read is on the
+    # request path and the counters have nothing to do with Postgres.
+    region: singapore
     plan: starter
     # Reachable only from inside the Render private network. A rate-limit
     # store exposed to the internet is a store anybody can flush.

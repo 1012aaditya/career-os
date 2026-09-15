@@ -25,6 +25,18 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+
+      # The Prisma client is GENERATED, not committed, and nothing else in
+      # these jobs produces it. Without this every import of @prisma/client
+      # fails with "Cannot find module '.prisma/client/default'".
+      #
+      # It cannot be left to `pnpm build`, which does run `prisma generate`:
+      # in the check job build runs AFTER typecheck, and the other two jobs
+      # never build at all. Generating explicitly, per job, states the
+      # dependency where it is actually needed.
+      - name: Generate Prisma client
+        run: npx prisma generate
+        working-directory: apps/api
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm build
@@ -45,6 +57,18 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+
+      # The Prisma client is GENERATED, not committed, and nothing else in
+      # these jobs produces it. Without this every import of @prisma/client
+      # fails with "Cannot find module '.prisma/client/default'".
+      #
+      # It cannot be left to `pnpm build`, which does run `prisma generate`:
+      # in the check job build runs AFTER typecheck, and the other two jobs
+      # never build at all. Generating explicitly, per job, states the
+      # dependency where it is actually needed.
+      - name: Generate Prisma client
+        run: npx prisma generate
+        working-directory: apps/api
 
       - name: API tests
         run: pnpm test
@@ -108,6 +132,18 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+
+      # The Prisma client is GENERATED, not committed, and nothing else in
+      # these jobs produces it. Without this every import of @prisma/client
+      # fails with "Cannot find module '.prisma/client/default'".
+      #
+      # It cannot be left to `pnpm build`, which does run `prisma generate`:
+      # in the check job build runs AFTER typecheck, and the other two jobs
+      # never build at all. Generating explicitly, per job, states the
+      # dependency where it is actually needed.
+      - name: Generate Prisma client
+        run: npx prisma generate
+        working-directory: apps/api
 
       # `migrate deploy`, never `migrate dev`. The same command production
       # runs: it applies the committed migrations in order and refuses to

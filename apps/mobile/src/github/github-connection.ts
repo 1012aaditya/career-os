@@ -387,3 +387,43 @@ function parseUrl(url: string): {
 
   return { scheme, path, params };
 }
+
+/**
+ * Whether a state means "there is a working connection".
+ *
+ * Read from the derived state, never from `status.connected`: the API
+ * reports `connected: true` whenever a connection ROW exists and carries
+ * the row's real state separately, so a REVOKED or INVALID connection
+ * would otherwise read as connected.
+ *
+ * `partial` and `syncing` count. A partial run is a run that covered some
+ * of the account and honestly said so - the connection is live, the data
+ * is incomplete, and those are different facts. Treating `partial` as
+ * disconnected put "Not connected" on a screen three rows above "ACTIVE",
+ * which is how this was found.
+ */
+export function isConnectedState(state: GithubUiState): boolean {
+  return (
+    state === 'connected' ||
+    state === 'partial' ||
+    state === 'syncing'
+  );
+}
+
+/**
+ * What to call a connected state on screen.
+ *
+ * Only meaningful when `isConnectedState` is true; a disconnected state
+ * has no label here because the caller decides what to say instead.
+ */
+export function connectedStateLabel(state: GithubUiState): string {
+  if (state === 'syncing') {
+    return 'Syncing…';
+  }
+
+  if (state === 'partial') {
+    return 'Connected · partly updated';
+  }
+
+  return 'Connected';
+}

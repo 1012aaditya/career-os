@@ -5,9 +5,11 @@ import {
 } from 'vitest';
 
 import {
+  connectedStateLabel,
   deriveUiState,
   describeCallbackFailure,
   describeSyncSummary,
+  isConnectedState,
   isPartialSync,
   parseCallbackUrl,
 } from './github-connection';
@@ -852,5 +854,59 @@ describe('deriveUiState', () => {
     expect(
       Object.keys(base),
     ).not.toContain('callback');
+  });
+});
+
+
+/*
+ * Which states mean "connected", and why `partial` is one of them.
+ *
+ * SourceDetailScreen checked `state === 'connected'` and so rendered
+ * "Not connected" above a row reading ACTIVE, after a real PARTIAL sync
+ * in production. The predicate now lives in one place; these pin it so a
+ * third screen cannot reintroduce its own copy.
+ */
+describe('isConnectedState', () => {
+  it('counts a partial sync as connected', () => {
+    expect(isConnectedState('partial')).toBe(true);
+  });
+
+  it('counts an in-flight sync as connected', () => {
+    expect(isConnectedState('syncing')).toBe(true);
+  });
+
+  it('counts a settled connection as connected', () => {
+    expect(isConnectedState('connected')).toBe(true);
+  });
+
+  /*
+   * `error` is a failed STATUS READ, not a disconnection - but it is also
+   * not a state in which we may claim a working connection.
+   */
+  it('does not claim a connection while disconnected, connecting or in error', () => {
+    expect(isConnectedState('disconnected')).toBe(false);
+    expect(isConnectedState('connecting')).toBe(false);
+    expect(isConnectedState('error')).toBe(false);
+  });
+});
+
+describe('connectedStateLabel', () => {
+  it('says a partial run is partly updated rather than done', () => {
+    expect(connectedStateLabel('partial')).toBe('Connected \u00b7 partly updated');
+  });
+
+  it('distinguishes an in-flight sync', () => {
+    expect(connectedStateLabel('syncing')).toBe('Syncing\u2026');
+  });
+
+  it('says plain Connected otherwise', () => {
+    expect(connectedStateLabel('connected')).toBe('Connected');
+  });
+
+  /* Never the word "Not" - the caller decides what a disconnection says. */
+  it('never produces a disconnected label', () => {
+    for (const state of ['connected', 'partial', 'syncing'] as const) {
+      expect(connectedStateLabel(state)).not.toMatch(/not/i);
+    }
   });
 });

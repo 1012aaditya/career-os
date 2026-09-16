@@ -2,6 +2,10 @@ import { useNavigation, useRoute, type RouteProp } from '@react-navigation/nativ
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { useGithubConnection } from '../../../github/GithubConnectionProvider';
+import {
+  connectedStateLabel,
+  isConnectedState,
+} from '../../../github/github-connection';
 import { relativeTime, sourceLabel } from '../../../evidence/evidence-view';
 import { useEvidence } from '../../../evidence/useEvidence';
 import {
@@ -56,7 +60,12 @@ function GithubSourceDetail({ onBack }: { onBack: () => void }) {
 
   const items = data.evidence.filter((item) => item.sourceType === 'GITHUB');
 
-  const connected = github.state === 'connected';
+  /*
+   * The shared predicate, not `state === 'connected'`. A PARTIAL sync
+   * leaves the state as `partial`, and treating that as disconnected put
+   * "Not connected" directly above a row reading ACTIVE.
+   */
+  const connected = isConnectedState(github.state);
   const lastSynced = relativeTime(github.status?.lastSyncedAt ?? null);
 
   return (
@@ -65,7 +74,9 @@ function GithubSourceDetail({ onBack }: { onBack: () => void }) {
         <View style={styles.header}>
           <AppText variant="title">GitHub</AppText>
           <AppText style={styles.state}>
-            {connected ? 'Connected' : 'Not connected'}
+            {connected
+              ? connectedStateLabel(github.state)
+              : 'Not connected'}
           </AppText>
           {github.status?.login != null ? (
             <AppText style={styles.detail}>@{github.status.login}</AppText>

@@ -1,4 +1,8 @@
 import { StyleSheet, View } from 'react-native';
+import {
+  connectedStateLabel,
+  isConnectedState,
+} from './github-connection';
 
 import {
   AppText,
@@ -45,10 +49,7 @@ export function GithubConnectionCard() {
    * would otherwise render a Sync button that the server refuses with a
    * 404. deriveUiState requires ACTIVE.
    */
-  const connected =
-    state === 'connected' ||
-    state === 'partial' ||
-    state === 'syncing';
+  const connected = isConnectedState(state);
 
   return (
     <View style={styles.section}>
@@ -68,7 +69,7 @@ export function GithubConnectionCard() {
               muted
             >
               {connected
-                ? statusLabel(state)
+                ? connectedStateLabel(state)
                 : state === 'error'
                   ? 'Status unavailable'
                   : 'Not connected'}
@@ -203,19 +204,7 @@ function formatDate(value: string): string {
   return new Date(parsed).toLocaleDateString();
 }
 
-function statusLabel(
-  state: string,
-): string {
-  if (state === 'syncing') {
-    return 'Syncing…';
-  }
 
-  if (state === 'partial') {
-    return 'Connected · partly updated';
-  }
-
-  return 'Connected';
-}
 
 const styles = StyleSheet.create({
   section: {

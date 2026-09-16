@@ -57,21 +57,30 @@ export class GithubOAuthConfig {
   readonly #clientSecret: string;
 
   constructor(config: ConfigService) {
-    const clientId = config.get<string>(
-      'GITHUB_CLIENT_ID',
-    );
+    /*
+     * Trimmed at the boundary, before anything validates or stores them.
+     *
+     * A trailing newline is invisible in a dashboard and survives a
+     * copy-paste, and `new URL()` strips one silently - so the value
+     * passed every check here and then went out on the wire as
+     * `...%2Fcallback%0A`, which GitHub compares byte-for-byte against
+     * the registered callback and rejects. The error surfaces on
+     * github.com, not in our logs, which is the worst place for it.
+     *
+     * Environment values are typed by a human into a web form. Treating
+     * surrounding whitespace as significant serves nobody, and
+     * `redisUrl()` in environment.ts already trims for the same reason.
+     */
+    const read = (key: string): string | undefined =>
+      config.get<string>(key)?.trim();
 
-    const clientSecret = config.get<string>(
-      'GITHUB_CLIENT_SECRET',
-    );
+    const clientId = read('GITHUB_CLIENT_ID');
 
-    const callbackUrl = config.get<string>(
-      'GITHUB_OAUTH_CALLBACK_URL',
-    );
+    const clientSecret = read('GITHUB_CLIENT_SECRET');
 
-    const mobileRedirectUri = config.get<string>(
-      'GITHUB_OAUTH_MOBILE_REDIRECT_URI',
-    );
+    const callbackUrl = read('GITHUB_OAUTH_CALLBACK_URL');
+
+    const mobileRedirectUri = read('GITHUB_OAUTH_MOBILE_REDIRECT_URI');
 
     if (
       !clientId ||

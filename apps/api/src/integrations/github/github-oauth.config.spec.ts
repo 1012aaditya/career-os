@@ -28,6 +28,70 @@ const build = (
   );
 
 describe('GithubOAuthConfig', () => {
+  /*
+   * Surrounding whitespace, and why it is not cosmetic.
+   *
+   * A trailing newline reached production through a dashboard paste. It
+   * survived every check here, because `new URL()` strips one before
+   * parsing - and then went to GitHub as `...%2Fcallback%0A`, which does
+   * not byte-match the registered callback. GitHub refused the
+   * authorisation on its own error page, so nothing in our logs said why.
+   *
+   * The stored value must therefore be the trimmed one, not merely a
+   * value that parses once trimmed.
+   */
+  describe('whitespace around configured values', () => {
+    it('is stripped from the callback url', () => {
+      const config = build({
+        GITHUB_OAUTH_CALLBACK_URL: `  ${TEST_GITHUB_CONFIG.GITHUB_OAUTH_CALLBACK_URL}\n\n`,
+      });
+
+      expect(config.callbackUrl).toBe(
+        TEST_GITHUB_CONFIG.GITHUB_OAUTH_CALLBACK_URL,
+      );
+      expect(config.callbackUrl).not.toMatch(/\s/);
+    });
+
+    it('is stripped from the mobile redirect uri', () => {
+      const config = build({
+        GITHUB_OAUTH_MOBILE_REDIRECT_URI: `\n${TEST_GITHUB_CONFIG.GITHUB_OAUTH_MOBILE_REDIRECT_URI}  `,
+      });
+
+      expect(config.mobileRedirectUri).toBe(
+        TEST_GITHUB_CONFIG.GITHUB_OAUTH_MOBILE_REDIRECT_URI,
+      );
+    });
+
+    /*
+     * The credentials matter just as much: a newline on the client id
+     * goes into the authorize URL, and one on the secret goes into an
+     * Authorization header, where it is both wrong and a header-injection
+     * shape.
+     */
+    it('is stripped from the client id and secret', () => {
+      const config = build({
+        GITHUB_CLIENT_ID: `${TEST_GITHUB_CONFIG.GITHUB_CLIENT_ID}\n`,
+        GITHUB_CLIENT_SECRET: ` ${TEST_GITHUB_CONFIG.GITHUB_CLIENT_SECRET}\n`,
+      });
+
+      expect(config.clientId).toBe(TEST_GITHUB_CONFIG.GITHUB_CLIENT_ID);
+      expect(config.clientSecret()).toBe(
+        TEST_GITHUB_CONFIG.GITHUB_CLIENT_SECRET,
+      );
+      expect(config.basicAuthorizationHeader()).not.toMatch(/\s$/);
+    });
+
+    /*
+     * Trimming must not become a way to configure nothing. A value that
+     * is only whitespace is absent, and absent already throws.
+     */
+    it('does not turn a whitespace-only value into a configured one', () => {
+      expect(() =>
+        build({ GITHUB_OAUTH_CALLBACK_URL: '   \n  ' }),
+      ).toThrow(/must be configured/);
+    });
+  });
+
   it('accepts the application scheme', () => {
     expect(() => build({})).not.toThrow();
 
